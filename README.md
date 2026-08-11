@@ -2,30 +2,20 @@
 
 FilzaSlop is a FilzaJailedDS fork with two access paths:
 
-- An exact-target iOS 18.5 kernel sandbox escape.
+- An iOS 18 sandbox escape.
 - MobileContainerManager access through the MobileHouseArrest identity bug.
 
 Successful container paths appear under `Documents/Device Storage`. FilzaSlop
 does not grant root access.
 
-## iOS 18 and iOS 26 status
+## Status
 
-`Confirmed` means a physical-device test proved file access. A returned path or
-sandbox token is not enough.
-
-| Feature | iOS 18 | iOS 26 |
-| --- | --- | --- |
-| FilzaJailedDS kernel sandbox removal | ✅ Confirmed on iPhone 16 Pro Max with iOS 18.5. | ❌ The exact-target gate skips this path. The bundled offsets reject iOS 26.1 and later. |
-| MobileHouseArrest class 2 app container | ❌ Path returned, but no usable sandbox extension. | ✅ Marker write, readback, restoration, and post-release denial confirmed. |
-| MobileHouseArrest class 7 app group, including Notes | ❌ Not confirmed through MobileContainerManager. The kernel path exposes the alias on the confirmed iOS 18.5 target. | ⚠️ Implemented, but the current iOS 26 test only confirmed class 2. |
-| Class 13 MobileGestalt cache | ❌ Group root only. No token, `part` API, or `O_RDWR` access. | ❌ Cache path returned, but no request granted directory or `O_RDWR` access. |
-| `geod` class 12 traversal to MobileGestalt | ❌ The required `part` and `partDomain` APIs are unavailable. | ❌ Target path returned without a token or `O_RDWR` access. |
-| InstallCoordination state directories | ❌ The current entry request needs the newer scoped-part APIs. | ⚠️ The standalone PoC activated the directory extensions. The final daemon write is not confirmed. |
-| `cfprefsd` missing-file creation | ➖ Not included. | ➖ Not included. |
+Some features may not work correctly yet on every supported iOS version. If
+you find a problem, please [open an issue](https://github.com/0xjohnnydev/FilzaSlop/issues).
 
 ## Paths
 
-The confirmed iOS 18.5 kernel path adds these aliases:
+The iOS 18 sandbox escape adds these aliases:
 
 ```text
 /private/var/mobile/Containers/Data/Application
@@ -43,8 +33,7 @@ permissions and Data Protection still apply.
 
 ## Requirements
 
-- The kernel path is gated to `iPhone17,2`, iOS 18.5, build `22F76`.
-- The kernel path can panic the device.
+- The sandbox escape can panic the device.
 - The MobileContainerManager path requires this signed CodeDirectory identifier:
 
 ```text
