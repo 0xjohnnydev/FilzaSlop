@@ -29,8 +29,6 @@ Some features may not work correctly yet. Please
 [open an issue](https://github.com/0xjohnnydev/FilzaSlop/issues) if you find a
 problem.
 
-The sandbox escape can panic the device.
-
 ## Signing
 
 Keep this bundle and CodeDirectory identifier when signing:
