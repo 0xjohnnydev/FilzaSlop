@@ -2,10 +2,28 @@
 
 FilzaJailedDS fork with a sandbox escape and MobileHouseArrest container access.
 
-It adds tappable aliases for app data, app groups, extensions, VPN data,
-service and system containers, system groups, protected data, MobileGestalt,
-and InstallCoordination. This includes the Notes app group when access is
-granted.
+## Paths
+
+FilzaSlop adds tappable aliases for:
+
+```text
+/private/var/mobile/Containers/Data/Application/
+/private/var/mobile/Containers/Shared/AppGroup/
+/private/var/mobile/Containers/Data/PluginKitPlugin/
+/private/var/mobile/Containers/Data/VPNPlugin/
+/private/var/mobile/Containers/Data/InternalDaemon/
+/private/var/mobile/Containers/Data/System/
+/private/var/mobile/Containers/Shared/SystemGroup/
+/private/var/mobile/Containers/Data/Protected/
+/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches/
+/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.installcoordinationd/Library/InstallCoordination/
+```
+
+The Notes database is inside:
+
+```text
+/private/var/mobile/Containers/Shared/AppGroup/<Notes-group-UUID>/NoteStore.sqlite
+```
 
 Some features may not work correctly yet. Please
 [open an issue](https://github.com/0xjohnnydev/FilzaSlop/issues) if you find a
