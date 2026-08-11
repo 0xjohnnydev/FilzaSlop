@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<caml xmlns="http://www.apple.com/CoreAnimation/1.0">
+  <CALayer allowsEdgeAntialiasing="1" allowsGroupOpacity="1" bounds="0 0 390 844" contentsFormat="RGBA8" geometryFlipped="1" hidden="0" name="Root Layer" position="195 422">
+    <scriptComponents/>
+    <states>
+      <LKState name="Locked">
+	<elements/>
+      </LKState>
+      <LKState name="Unlock">
+	<elements/>
+      </LKState>
+      <LKState name="Sleep">
+	<elements/>
+      </LKState>
+    </states>
+    <stateTransitions>
+      <LKStateTransition fromState="*" toState="Unlock">
+	<elements/>
+      </LKStateTransition>
+      <LKStateTransition fromState="Unlock" toState="*">
+	<elements/>
+      </LKStateTransition>
+      <LKStateTransition fromState="*" toState="Locked">
+	<elements/>
+      </LKStateTransition>
+      <LKStateTransition fromState="Locked" toState="*">
+	<elements/>
+      </LKStateTransition>
+      <LKStateTransition fromState="*" toState="Sleep">
+	<elements/>
+      </LKStateTransition>
+      <LKStateTransition fromState="Sleep" toState="*">
+	<elements/>
+      </LKStateTransition>
+    </stateTransitions>
+  </CALayer>
+</caml>

@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ╔═══════════════════════════════════════════════════════════════╗
+  ║                                                               ║
+  ║                         CAPlayground                          ║
+  ║                                                               ║
+  ║      Create beautiful Core Animation wallpapers for iOS       ║
+  ║                                                               ║
+  ║          Website: https://caplayground.pages.dev              ║
+  ║                                                               ║
+  ╚═══════════════════════════════════════════════════════════════╝
+-->
+<caml xmlns="http://www.apple.com/CoreAnimation/1.0">
+  <CALayer id="__capRootLayer__" name="CAPlayground Root Layer" bounds="0 0 390 844" position="195 422" geometryFlipped="0" opacity="1" transform.rotation.z="0" transform.rotation.x="0" transform.rotation.y="0" transform="rotate(0deg) rotate(0deg, 0, 1, 0) rotate(0deg, 1, 0, 0)" allowsEdgeAntialiasing="1" allowsGroupOpacity="1" contentsFormat="RGBA8" cornerCurve="circular">
+    <sublayers>
+      <CALayer id="1762654973048" name="Root Layer" bounds="0 0 390 844" position="195 422" geometryFlipped="0" opacity="1" transform.rotation.z="0" transform.rotation.x="0" transform.rotation.y="0" transform="rotate(0deg) rotate(0deg, 0, 1, 0) rotate(0deg, 1, 0, 0)" allowsEdgeAntialiasing="1" allowsGroupOpacity="1" contentsFormat="RGBA8" cornerCurve="circular"/>
+    </sublayers>
+    <modules/>
+    <states>
+      <LKState name="Locked">
+        <elements/>
+      </LKState>
+      <LKState name="Unlock">
+        <elements/>
+      </LKState>
+      <LKState name="Sleep">
+        <elements/>
+      </LKState>
+    </states>
+    <stateTransitions>
+      <LKStateTransition fromState="*" toState="Locked">
+        <elements/>
+      </LKStateTransition>
+      <LKStateTransition fromState="Locked" toState="*">
+        <elements/>
+      </LKStateTransition>
+      <LKStateTransition fromState="*" toState="Unlock">
+        <elements/>
+      </LKStateTransition>
+      <LKStateTransition fromState="Unlock" toState="*">
+        <elements/>
+      </LKStateTransition>
+      <LKStateTransition fromState="*" toState="Sleep">
+        <elements/>
+      </LKStateTransition>
+      <LKStateTransition fromState="Sleep" toState="*">
+        <elements/>
+      </LKStateTransition>
+    </stateTransitions>
+  </CALayer>
+</caml>

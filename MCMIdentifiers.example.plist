@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>AppData</key>
+    <array>
+        <string>com.example.controlled-victim</string>
+    </array>
+    <key>AppGroups</key>
+    <array/>
+	<key>ExtensionData</key>
+	<array/>
+	<key>VPNData</key>
+	<array/>
+	<key>ServiceData</key>
+	<array/>
+	<key>SystemData</key>
+	<array/>
+	<key>SystemGroups</key>
+	<array/>
+	<key>ProtectedData</key>
+	<array/>
+</dict>
+</plist>

@@ -1,0 +1,12 @@
+Cipher
+
+Author: @mightycooldude12
+Description: Decoding...
+Collection: SerStars/nugget-wallpapers
+Source: https://github.com/SerStars/nugget-wallpapers/blob/a153aedfc1f17275828b99a810269e13a0229969/wallpapers/custom/Cipher.tendies
+Collection commit: a153aedfc1f17275828b99a810269e13a0229969
+Original Cipher.tendies SHA-256: 196a1b8ad6e6c08662d494af06789ebc65b67f00eb38149d70bae2258d0b6ae9
+License: GPL-3.0; see LICENSE-GPL-3.0.txt
+
+The bundled directory is a safety-normalized extraction of the original
+archive. __MACOSX, AppleDouble, and .DS_Store metadata were omitted.
