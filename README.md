@@ -60,114 +60,14 @@ The bundle identifier and signed CodeDirectory identifier must match.
 
 The release IPA is unsigned. It contains no provisioning profile, development
 certificate signature, device identifier list, or generated device catalog.
-Sign it with your own certificate before installation.
+Sign it with your normal sideloading tool before installation. No container
+UUID or device-specific FilzaSlop build is required.
 
-### What is user-specific
+Keep the bundle identifier as `com.apple.mobile.MobileHouseArrest`. The
+MobileHouseArrest path will not work if the signing tool changes that value.
 
-Three different identifiers can appear during this process:
-
-- **Device UDID:** Apple uses this value only to authorize installation of a
-  development-signed app on that physical iPhone. The provisioning profile
-  already contains it. The exploit does not read or use it.
-- **App-container UUID:** iOS creates this random directory name during
-  installation. FilzaSlop discovers it at runtime. Never hardcode it.
-- **Bundle and CodeDirectory identifier:** The MobileHouseArrest path requires
-  this identifier to remain exactly `com.apple.mobile.MobileHouseArrest`.
-
-The user-specific inputs are the signing certificate and provisioning profile.
-The final signature contains the user's Apple Developer Team ID. Users do not
-enter a UDID separately because their profile already contains it.
-
-The signer must preserve these values:
-
-```text
-CFBundleIdentifier:       com.apple.mobile.MobileHouseArrest
-CodeDirectory identifier: com.apple.mobile.MobileHouseArrest
-application-identifier:   <YOUR_TEAM_ID>.com.apple.mobile.MobileHouseArrest
-```
-
-Do not let AltStore, Sideloadly, or another signer replace the bundle
-identifier. A changed identifier prevents the MobileHouseArrest path from
-using the required host identity.
-
-The iOS 18.5 kernel path does not depend on a device catalog. The optional
-`MCMIdentifiers.plist` contains installed bundle identifiers, not container
-UUIDs. Generate that catalog separately for MCM testing on another device.
-
-## Sign with GitHub Actions
-
-Use the workflow only in your own fork. Do not send a certificate, private key,
-profile, or password to this repository.
-
-1. Fork this repository to your GitHub account.
-2. Create a wildcard iOS development provisioning profile.
-3. Include your target iPhone in that profile.
-4. Export the matching certificate and private key as a `.p12` file.
-5. Add the four secrets below to your fork under **Settings > Secrets and
-   variables > Actions**.
-
-| Secret | Value |
-| --- | --- |
-| `IOS_CERTIFICATE_BASE64` | Base64 form of the `.p12` file |
-| `IOS_CERTIFICATE_PASSWORD` | Password used when exporting the `.p12` file |
-| `IOS_PROVISIONING_PROFILE_BASE64` | Base64 form of the `.mobileprovision` file |
-| `OUTPUT_PASSWORD` | A new password used to encrypt the signed IPA artifact |
-
-Create the two Base64 values on macOS:
-
-```sh
-/usr/bin/base64 < certificate.p12 | pbcopy
-/usr/bin/base64 < profile.mobileprovision | pbcopy
-```
-
-Open the **Actions** tab in your fork. Select **Sign IPA for your device** and
-choose **Run workflow**.
-
-The workflow checks the following items before signing:
-
-- The profile is not expired.
-- The profile permits `com.apple.mobile.MobileHouseArrest`.
-- The P12 certificate belongs to the profile.
-- The profile authorizes at least one device.
-- The final bundle, CodeDirectory, and application identifiers are correct.
-
-The workflow uploads only an encrypted `.ipa.enc` file. This prevents the
-public workflow artifact from exposing the provisioning profile's device
-UDIDs. The artifact expires after one day.
-
-Decrypt the downloaded artifact on your Mac:
-
-```sh
-read -s OUTPUT_PASSWORD
-export OUTPUT_PASSWORD
-openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
-  -in FilzaSlop-v1.0.0-signed.ipa.enc \
-  -out FilzaSlop-v1.0.0-signed.ipa \
-  -pass env:OUTPUT_PASSWORD
-unset OUTPUT_PASSWORD
-```
-
-You can then install `FilzaSlop-v1.0.0-signed.ipa` on an iPhone listed in the
-profile.
-
-## Sign locally on macOS
-
-Download the unsigned IPA from the release. Then run:
-
-```sh
-read -s P12_PASSWORD
-export P12_PASSWORD
-scripts/sign_ipa.sh \
-  FilzaSlop-v1.0.0-unsigned.ipa \
-  certificate.p12 \
-  profile.mobileprovision \
-  FilzaSlop-v1.0.0-signed.ipa
-unset P12_PASSWORD
-```
-
-The script creates a temporary keychain. It signs nested code first and signs
-the app last. It also verifies the final identifiers and complete code
-signature before it writes the output IPA.
+Container UUIDs are assigned by iOS during installation and resolved at
+runtime. The iOS 18.5 kernel path does not need `MCMIdentifiers.plist`.
 
 ## Build the tweak
 
