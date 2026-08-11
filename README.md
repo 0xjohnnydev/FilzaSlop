@@ -4,14 +4,41 @@ FilzaSlop is a modified FilzaJailedDS build for testing iOS container access.
 It combines the original FilzaJailedDS exploit with the MobileHouseArrest and
 MobileContainerManager bugs.
 
-FilzaSlop supports iOS 18, iOS 26, and iOS 27 beta 1 through beta 4.
+FilzaSlop has two separate access paths:
+
+1. The original FilzaJailedDS kernel path on one exact iOS 18 target.
+2. MobileContainerManager requests for other targets.
+
+The complete feature set does not work on every listed iOS version.
 
 It adds tappable folders in Filza for app data, app groups, extensions, VPN
 data, service and system containers, system groups, protected data,
 MobileGestalt, and InstallCoordination. Filza can read and modify files where
 the selected bug grants access.
 
-## Tested device
+## iOS 18 and iOS 26 checklist
+
+`Confirmed` means a physical-device test proved the stated file access. A
+returned path or sandbox token is not enough by itself.
+
+| Feature | iOS 18 | iOS 26 |
+| --- | --- | --- |
+| FilzaJailedDS kernel sandbox removal | ✅ Confirmed only on iPhone 16 Pro Max with iOS 18.5. | ❌ Not supported. FilzaSlop skips this path, and the bundled offsets reject iOS 26.1 and later. |
+| MobileHouseArrest class 2 app container | ❌ The current PoC returned a path but no usable sandbox extension. | ✅ Confirmed. The PoC wrote and restored a marker in one selected app container. |
+| MobileHouseArrest class 7 app group, including Notes | ❌ Not confirmed through MobileContainerManager. The exact iOS 18.5 kernel path exposes these aliases separately. | ⚠️ Implemented in FilzaSlop, but the current iOS 26 run only confirmed class 2. |
+| Class 13 MobileGestalt cache | ❌ The query returned the system-group root without a token. iOS 18 also lacks the newer `part` API. | ❌ The query returned the cache path, but no tested request granted directory access or `O_RDWR` access to the plist. |
+| `geod` class 12 traversal to MobileGestalt | ❌ The current implementation requires the missing `part` and `partDomain` APIs. | ❌ The query returned the lexical target path without a token or `O_RDWR` access. |
+| InstallCoordination state directories | ❌ Not confirmed. The current entry request requires the newer scoped-part APIs. | ⚠️ The standalone PoC activated extensions for the state directories. The daemon stopped because its state was not idle, so the final symlink write is not confirmed. |
+| `cfprefsd` missing-file creation | ➖ Not included in FilzaSlop. | ➖ Not included in FilzaSlop. |
+
+The matching PoCs are:
+
+- [MobileHouseArrest-PoC](https://github.com/0xjohnnydev/MobileHouseArrest-PoC)
+- [Geod-MCM-PoC](https://github.com/0xjohnnydev/Geod-MCM-PoC)
+- [InstallCoordination-PoC](https://github.com/0xjohnnydev/InstallCoordination-PoC)
+- [CFPrefsZeroFile-PoC](https://github.com/0xjohnnydev/CFPrefsZeroFile-PoC)
+
+## Confirmed iOS 18 device
 
 The original FilzaJailedDS exploit has an exact runtime gate for:
 
