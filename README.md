@@ -6,6 +6,11 @@ MobileContainerManager bugs.
 
 FilzaSlop supports iOS 18, iOS 26, and iOS 27 beta 1 through beta 4.
 
+It adds tappable folders in Filza for app data, app groups, extensions, VPN
+data, service and system containers, system groups, protected data,
+MobileGestalt, and InstallCoordination. Filza can read and modify files where
+the selected bug grants access.
+
 ## Tested device
 
 The original FilzaJailedDS exploit has an exact runtime gate for:
