@@ -65,8 +65,20 @@ fi
 WORK_DIRECTORY="$(mktemp -d)"
 KEYCHAIN="$WORK_DIRECTORY/signing.keychain-db"
 KEYCHAIN_PASSWORD="$(uuidgen)"
+ORIGINAL_KEYCHAINS=()
+while IFS= read -r keychain; do
+    keychain="$(printf '%s' "$keychain" |
+        sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//')"
+    if [[ -n "$keychain" ]]; then
+        ORIGINAL_KEYCHAINS+=("$keychain")
+    fi
+done < <(security list-keychains -d user)
 
 cleanup() {
+    if [[ ${#ORIGINAL_KEYCHAINS[@]} -gt 0 ]]; then
+        security list-keychains -d user -s "${ORIGINAL_KEYCHAINS[@]}" \
+            >/dev/null 2>&1 || true
+    fi
     security delete-keychain "$KEYCHAIN" >/dev/null 2>&1 || true
     python3 - "$WORK_DIRECTORY" <<'PY'
 import os
@@ -82,6 +94,7 @@ trap cleanup EXIT INT TERM
 security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
 security set-keychain-settings -lut 21600 "$KEYCHAIN"
 security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+security list-keychains -d user -s "$KEYCHAIN" "${ORIGINAL_KEYCHAINS[@]}"
 security import "$CERTIFICATE_P12" \
     -k "$KEYCHAIN" \
     -P "$P12_PASSWORD" \

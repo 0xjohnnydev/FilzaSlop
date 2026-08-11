@@ -50,6 +50,15 @@ jobs:
           printf '%s' "$IOS_PROVISIONING_PROFILE_BASE64" | /usr/bin/base64 -D > profile.mobileprovision
           chmod 600 certificate.p12 profile.mobileprovision
 
+      - name: Mask profile metadata
+        run: |
+          set -euo pipefail
+          security cms -D -i profile.mobileprovision > profile-metadata.plist
+          TEAM_ID="$(plutil -extract TeamIdentifier.0 raw profile-metadata.plist)"
+          PROFILE_NAME="$(plutil -extract Name raw profile-metadata.plist)"
+          echo "::add-mask::$TEAM_ID"
+          echo "::add-mask::$PROFILE_NAME"
+
       - name: Sign the IPA
         env:
           P12_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
@@ -89,6 +98,7 @@ jobs:
           for path in (
               "certificate.p12",
               "profile.mobileprovision",
+              "profile-metadata.plist",
               "FilzaSlop-v1.0.0-signed.ipa",
           ):
               try:
