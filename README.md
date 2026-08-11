@@ -1,28 +1,28 @@
 # FilzaSlop
 
 FilzaSlop is a modified FilzaJailedDS build for testing iOS container access.
-It combines the original kernel sandbox path with the MobileHouseArrest and
-MobileContainerManager path.
+It combines the original FilzaJailedDS exploit with the MobileHouseArrest and
+MobileContainerManager bugs.
 
-## Tested kernel path
+## Tested device
 
-The kernel path has an exact runtime gate for:
+The original FilzaJailedDS exploit has an exact runtime gate for:
 
 - iPhone 16 Pro Max (`iPhone17,2`)
 - iOS 18.5
 - build `22F76`
 
-On this target, the app runs `kexploit_opa334`, patches its own sandbox, and
-then adds real filesystem aliases to the Filza interface. Runtime testing
+On this target, the app runs `kexploit_opa334`, removes Filza's sandbox
+restrictions, and adds real filesystem aliases to the Filza interface. Testing
 confirmed out-of-bounds physical read/write, `sandbox_escape()` returning zero,
 and directory access through the aliases.
 
-The kernel exploit can panic the device. The exact target check prevents this
+The exploit can panic the device. The exact target check prevents this
 path from running on other devices or builds.
 
 ## Paths shown in Filza
 
-The iOS 18.5 kernel path adds aliases for these container roots:
+On the tested device, FilzaSlop adds aliases for these container roots:
 
 ```text
 /private/var/mobile/Containers/Data/Application
@@ -44,8 +44,8 @@ still apply.
 
 ## MobileContainerManager path
 
-Other targets use the retained MobileHouseArrest and MobileContainerManager
-implementation. It requests container classes 2, 4, 6, 7, 10, 12, 13, and 15.
+FilzaSlop also includes the MobileHouseArrest and MobileContainerManager bugs.
+It requests container classes 2, 4, 6, 7, 10, 12, 13, and 15.
 Successful paths appear under `Documents/Device Storage`.
 
 The final app identity must be:
@@ -67,7 +67,7 @@ Keep the bundle identifier as `com.apple.mobile.MobileHouseArrest`. The
 MobileHouseArrest path will not work if the signing tool changes that value.
 
 Container UUIDs are assigned by iOS during installation and resolved at
-runtime. The iOS 18.5 kernel path does not need `MCMIdentifiers.plist`.
+runtime. The iOS 18.5 implementation does not need `MCMIdentifiers.plist`.
 
 ## Build the tweak
 
