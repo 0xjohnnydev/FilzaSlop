@@ -10,6 +10,9 @@ FilzaJailedDS fork with:
 > **Not every feature currently works on iOS 18 or iOS 26.**
 > [Open an issue](https://github.com/0xjohnnydev/FilzaSlop/issues) if you find a problem.
 
+**The unsigned IPA is available on the
+[Releases page](https://github.com/0xjohnnydev/FilzaSlop/releases).**
+
 ## Paths
 
 ### Container roots
