@@ -2,7 +2,7 @@
 
 FilzaSlop is a FilzaJailedDS fork with two access paths:
 
-- An iOS 18 sandbox escape.
+- A sandbox escape.
 - MobileContainerManager access through the MobileHouseArrest identity bug.
 
 Successful container paths appear under `Documents/Device Storage`. FilzaSlop
@@ -15,7 +15,7 @@ you find a problem, please [open an issue](https://github.com/0xjohnnydev/FilzaS
 
 ## Paths
 
-The iOS 18 sandbox escape adds these aliases:
+The sandbox escape adds these aliases:
 
 ```text
 /private/var/mobile/Containers/Data/Application
