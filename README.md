@@ -1,10 +1,18 @@
 # FilzaSlop
 
-FilzaJailedDS fork with a sandbox escape and MobileHouseArrest container access.
+FilzaJailedDS fork with:
+
+- A sandbox escape.
+- MobileHouseArrest container access.
+- Tappable container aliases in Filza.
+- A PosterBoard Wallpaper Lab.
+
+> **Not every feature currently works on iOS 18 or iOS 26.**
+> [Open an issue](https://github.com/0xjohnnydev/FilzaSlop/issues) if you find a problem.
 
 ## Paths
 
-FilzaSlop adds tappable aliases for:
+### Container roots
 
 ```text
 /private/var/mobile/Containers/Data/Application/
@@ -15,30 +23,51 @@ FilzaSlop adds tappable aliases for:
 /private/var/mobile/Containers/Data/System/
 /private/var/mobile/Containers/Shared/SystemGroup/
 /private/var/mobile/Containers/Data/Protected/
+```
+
+### Additional paths
+
+```text
 /private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches/
 /private/var/containers/Shared/SystemGroup/systemgroup.com.apple.installcoordinationd/Library/InstallCoordination/
 ```
 
-The Notes database is inside:
+### Notable app data
 
 ```text
+# Notes
 /private/var/mobile/Containers/Shared/AppGroup/<Notes-group-UUID>/NoteStore.sqlite
+
+# Safari app data
+/private/var/mobile/Containers/Data/Application/<Safari-app-UUID>/
+
+# Safari shared data: group.com.apple.safari
+/private/var/mobile/Containers/Shared/AppGroup/<Safari-group-UUID>/
 ```
 
-Safari data is available through its app container and shared app group:
+## PosterBoard
+
+Wallpaper Lab can:
+
+- Inspect the PosterBoard descriptor store.
+- Import the bundled Cipher wallpaper.
+- Import extracted `.tendies` wallpaper packages.
+- Apply the PosterBoard refresh preferences.
+- Roll back the latest import.
+
+Place additional packages in:
 
 ```text
-/private/var/mobile/Containers/Data/Application/<Safari-app-UUID>/
-/private/var/mobile/Containers/Shared/AppGroup/<Safari-group-UUID>/  (group.com.apple.safari)
+Documents/Device Storage/[MHA-C2] Wallpaper Lab/Imports/
 ```
 
-**Not every feature currently works on iOS 18 or iOS 26.** Please
-[open an issue](https://github.com/0xjohnnydev/FilzaSlop/issues) if you find a
-problem.
+Use the **Wallpaper** button at the Wallpaper Lab root. Imports add new
+descriptor directories and keep a rollback backup. They do not overwrite the
+PosterBoard database or existing descriptors.
 
 ## Signing
 
-Keep this bundle and CodeDirectory identifier when signing:
+Keep this bundle and CodeDirectory identifier:
 
 ```text
 com.apple.mobile.MobileHouseArrest
