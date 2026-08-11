@@ -4,7 +4,7 @@ FilzaJailedDS fork with:
 
 - A sandbox escape for iOS 18, iOS 26, and iOS 27 beta 1–4.
 - App container access.
-- Other less exciting directories listed below.
+- Other less interesting directories listed below.
 - A PosterBoard Wallpaper Lab.
 
 > **Not every feature currently works on iOS 18 or iOS 26.**
