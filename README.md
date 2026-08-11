@@ -25,6 +25,13 @@ The Notes database is inside:
 /private/var/mobile/Containers/Shared/AppGroup/<Notes-group-UUID>/NoteStore.sqlite
 ```
 
+Safari data is available through its app container and shared app group:
+
+```text
+/private/var/mobile/Containers/Data/Application/<Safari-app-UUID>/
+/private/var/mobile/Containers/Shared/AppGroup/<Safari-group-UUID>/  (group.com.apple.safari)
+```
+
 Some features may not work correctly yet. Please
 [open an issue](https://github.com/0xjohnnydev/FilzaSlop/issues) if you find a
 problem.
