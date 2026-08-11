@@ -90,12 +90,40 @@ security set-key-partition-list \
     -S apple-tool:,apple:,codesign: \
     -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
 
-SIGNING_IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" |
-    awk '/[0-9]+\) [A-F0-9]{40}/ { print $2; exit }')"
-if [[ -z "$SIGNING_IDENTITY" ]]; then
+PROFILE_PLIST="$WORK_DIRECTORY/profile.plist"
+security cms -D -i "$PROVISIONING_PROFILE" > "$PROFILE_PLIST"
+
+IDENTITIES_FILE="$WORK_DIRECTORY/identities.txt"
+security find-identity -v -p codesigning "$KEYCHAIN" |
+    awk '/[0-9]+\) [A-F0-9]{40}/ { print $2 }' > "$IDENTITIES_FILE"
+if [[ ! -s "$IDENTITIES_FILE" ]]; then
     echo "The P12 file does not contain a usable code-signing identity." >&2
     exit 1
 fi
+
+SIGNING_IDENTITY="$(python3 - "$PROFILE_PLIST" "$IDENTITIES_FILE" <<'PY'
+import hashlib
+import plistlib
+import sys
+
+profile_path, identities_path = sys.argv[1:]
+with open(profile_path, "rb") as stream:
+    profile = plistlib.load(stream)
+with open(identities_path, "r", encoding="utf-8") as stream:
+    identities = [line.strip().upper() for line in stream if line.strip()]
+
+allowed = {
+    hashlib.sha1(bytes(certificate)).hexdigest().upper()
+    for certificate in profile.get("DeveloperCertificates", [])
+}
+for identity in identities:
+    if identity in allowed:
+        print(identity)
+        break
+else:
+    raise SystemExit("No P12 identity belongs to the provisioning profile.")
+PY
+)"
 
 PAYLOAD_DIRECTORY="$WORK_DIRECTORY/extracted"
 mkdir -p "$PAYLOAD_DIRECTORY"
@@ -127,9 +155,6 @@ for root, dirs, files in os.walk(app, topdown=False):
         if name == "_CodeSignature":
             shutil.rmtree(os.path.join(root, name))
 PY
-
-PROFILE_PLIST="$WORK_DIRECTORY/profile.plist"
-security cms -D -i "$PROVISIONING_PROFILE" > "$PROFILE_PLIST"
 
 BUNDLE_IDS="$WORK_DIRECTORY/bundle_ids.txt"
 : > "$BUNDLE_IDS"
