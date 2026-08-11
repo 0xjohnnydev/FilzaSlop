@@ -32,7 +32,7 @@ Safari data is available through its app container and shared app group:
 /private/var/mobile/Containers/Shared/AppGroup/<Safari-group-UUID>/  (group.com.apple.safari)
 ```
 
-Some features may not work correctly yet. Please
+**Not every feature currently works on iOS 18 or iOS 26.** Please
 [open an issue](https://github.com/0xjohnnydev/FilzaSlop/issues) if you find a
 problem.
 
