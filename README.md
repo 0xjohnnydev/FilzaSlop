@@ -4,6 +4,8 @@ FilzaSlop is a modified FilzaJailedDS build for testing iOS container access.
 It combines the original FilzaJailedDS exploit with the MobileHouseArrest and
 MobileContainerManager bugs.
 
+The included bugs affect iOS 18, iOS 26, and iOS 27 beta 1 through beta 4.
+
 ## Tested device
 
 The original FilzaJailedDS exploit has an exact runtime gate for:
