@@ -64,12 +64,19 @@ Sign it with your own certificate before installation.
 
 ### What is user-specific
 
-The app does not contain a hardcoded container UUID. iOS assigns container
-UUIDs during installation, and FilzaSlop resolves them at runtime.
+Three different identifiers can appear during this process:
 
-The user-specific value is the signing profile. An iOS development profile
-contains the target iPhone's device UDID. The final signature also contains the
-user's Apple Developer Team ID.
+- **Device UDID:** Apple uses this value only to authorize installation of a
+  development-signed app on that physical iPhone. The provisioning profile
+  already contains it. The exploit does not read or use it.
+- **App-container UUID:** iOS creates this random directory name during
+  installation. FilzaSlop discovers it at runtime. Never hardcode it.
+- **Bundle and CodeDirectory identifier:** The MobileHouseArrest path requires
+  this identifier to remain exactly `com.apple.mobile.MobileHouseArrest`.
+
+The user-specific inputs are the signing certificate and provisioning profile.
+The final signature contains the user's Apple Developer Team ID. Users do not
+enter a UDID separately because their profile already contains it.
 
 The signer must preserve these values:
 
