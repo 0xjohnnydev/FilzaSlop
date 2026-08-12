@@ -6,6 +6,7 @@
 #import <notify.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
+#import <stdlib.h>
 #import <string.h>
 #import <sys/stat.h>
 #import <unistd.h>
@@ -44,6 +45,7 @@ static void MCMEnsureState(void)
 + (id)defaultWorkspace;
 - (NSArray *)allApplications;
 - (NSString *)applicationIdentifier;
+- (NSString *)bundleIdentifier;
 @end
 
 NSString *MCMFilzaVirtualRoot(void)
@@ -93,20 +95,27 @@ static NSString *MCMActivate(uint64_t containerClass, NSString *identifier,
     }
     @synchronized (gLeases) {
         MCMLease *existing = gLeases[MCMKey(containerClass, identifier)];
-        if (existing.activated || (gUnrestrictedFilesystem && existing.rootPath.length))
+        if (existing.rootPath.length)
             return existing.rootPath;
         NSString *detail = nil;
         MCMLease *lease = [MCMLease leaseForClass:containerClass identifier:identifier
             group:group part:0 flags:kMCMFlags error:&detail];
         BOOL activated = lease && [lease activate:&detail];
-        if (!lease || (!activated && !gUnrestrictedFilesystem)) {
-            [lease invalidate];
+        if (!lease) {
             if (error) *error = detail ?: @"MCM activation failed";
             return nil;
         }
+        // iOS 26 containermanagerd lacks genericExtensionsAllowedForAll, so it
+        // refuses sandbox tokens for callers not in the per-class allowed set.
+        // The path is still valid — try opening it before giving up.
         int descriptor = open(lease.rootPath.fileSystemRepresentation,
                               O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
         if (descriptor < 0) {
+            if (!activated && !gUnrestrictedFilesystem) {
+                if (error) *error = detail ?: @"MCM activation failed";
+                [lease invalidate];
+                return nil;
+            }
             if (error) *error = [NSString stringWithFormat:@"container root open failed errno=%d", errno];
             [lease invalidate];
             return nil;
@@ -134,19 +143,24 @@ static NSString *MCMActivateScoped(uint64_t containerClass, NSString *identifier
     NSString *key = MCMScopedKey(containerClass, identifier, part, partDomain, flags);
     @synchronized (gLeases) {
         MCMLease *existing = gLeases[key];
-        if (existing.activated) return existing.rootPath;
+        if (existing.rootPath.length) return existing.rootPath;
         NSString *detail = nil;
         MCMLease *lease = [MCMLease leaseForClass:containerClass
             identifier:identifier group:group part:part partDomain:partDomain
             flags:flags error:&detail];
-        if (!lease || ![lease activate:&detail]) {
-            [lease invalidate];
+        BOOL activated = lease && [lease activate:&detail];
+        if (!lease) {
             if (error) *error = detail ?: @"scoped MCM activation failed";
             return nil;
         }
         int descriptor = open(lease.rootPath.fileSystemRepresentation,
                               O_RDONLY | O_DIRECTORY | O_CLOEXEC);
         if (descriptor < 0) {
+            if (!activated) {
+                if (error) *error = detail ?: @"scoped MCM activation failed";
+                [lease invalidate];
+                return nil;
+            }
             if (error) *error = [NSString stringWithFormat:
                 @"scoped directory open failed errno=%d", errno];
             [lease invalidate];
@@ -199,14 +213,18 @@ BOOL MCMFilzaPathHasActiveLease(NSString *path)
     return NO;
 }
 
-static void MCMInstallLink(NSString *directory, NSString *identifier,
-                           uint64_t containerClass, BOOL group)
+static void MCMInstallLinkWithFailureLogging(NSString *directory,
+                                             NSString *identifier,
+                                             uint64_t containerClass,
+                                             BOOL group,
+                                             BOOL logFailure)
 {
     NSString *error = nil;
     NSString *target = MCMActivate(containerClass, identifier, group, &error);
     if (!target) {
-        NSLog(@"[MCMFilza] activation failed class=%llu id=%@ detail=%@",
-              containerClass, identifier, error);
+        if (logFailure)
+            NSLog(@"[MCMFilza] activation failed class=%llu id=%@ detail=%@",
+                  containerClass, identifier, error);
         return;
     }
     NSString *link = [directory stringByAppendingPathComponent:identifier];
@@ -220,6 +238,13 @@ static void MCMInstallLink(NSString *directory, NSString *identifier,
     }
     if (symlink(target.fileSystemRepresentation, link.fileSystemRepresentation) != 0)
         NSLog(@"[MCMFilza] symlink failed id=%@ errno=%d", identifier, errno);
+}
+
+static void MCMInstallLink(NSString *directory, NSString *identifier,
+                           uint64_t containerClass, BOOL group)
+{
+    MCMInstallLinkWithFailureLogging(directory, identifier, containerClass,
+                                     group, YES);
 }
 
 static NSString *MCMDirectIdentifier(NSString *containerPath, NSString *fallback)
@@ -693,6 +718,127 @@ static void MCMInstallExperimentalFolder(NSString *directory)
         stringByAppendingPathComponent:@"Probe Results.plist"] atomically:YES];
 }
 
+static BOOL MCMLaunchServicesIdentifierByte(uint8_t value)
+{
+    return (value >= 'a' && value <= 'z') ||
+        (value >= 'A' && value <= 'Z') ||
+        (value >= '0' && value <= '9') ||
+        value == '.' || value == '-' || value == '_';
+}
+
+static NSArray<NSString *> *MCMExpectedIdentifiersFromEnvironment(void)
+{
+    const char *value = getenv("FILZA_MCM_EXPECT_IDENTIFIERS");
+    if (!value || !value[0]) return @[];
+    NSString *joined = [NSString stringWithUTF8String:value];
+    NSMutableOrderedSet<NSString *> *result = [NSMutableOrderedSet orderedSet];
+    for (NSString *identifier in [joined componentsSeparatedByString:@","])
+        if (MCMSafeIdentifier(identifier)) [result addObject:identifier];
+    return result.array;
+}
+
+static void MCMLogExpectedIdentifierCoverage(NSString *label,
+                                             NSSet<NSString *> *actual)
+{
+    NSArray<NSString *> *expected = MCMExpectedIdentifiersFromEnvironment();
+    if (expected.count == 0) return;
+    NSMutableArray<NSString *> *missing = [NSMutableArray array];
+    for (NSString *identifier in expected)
+        if (![actual containsObject:identifier]) [missing addObject:identifier];
+    NSLog(@"[MCMFilza] %@ expected=%lu matched=%lu missing=%@", label,
+          (unsigned long)expected.count,
+          (unsigned long)(expected.count - missing.count), missing);
+}
+
+static void MCMResetAppLinksForTesting(NSString *directory)
+{
+    if (!getenv("FILZA_MCM_RESET_APP_LINKS")) return;
+    NSFileManager *manager = NSFileManager.defaultManager;
+    for (NSString *name in [manager contentsOfDirectoryAtPath:directory error:nil] ?: @[]) {
+        NSString *path = [directory stringByAppendingPathComponent:name];
+        struct stat status = {0};
+        if (lstat(path.fileSystemRepresentation, &status) == 0 &&
+            S_ISLNK(status.st_mode))
+            unlink(path.fileSystemRepresentation);
+    }
+    NSLog(@"[MCMFilza] reset App Data links for test");
+}
+
+static NSArray<NSString *> *MCMLaunchServicesStoreIdentifiers(void)
+{
+    static const NSUInteger kMaximumCandidateCount = 65536;
+    NSString *error = nil;
+    NSString *container = MCMActivate(10, @"com.apple.lsd", NO, &error);
+    if (!container.length) {
+        NSLog(@"[MCMFilza] LaunchServices store unavailable detail=%@", error);
+        return @[];
+    }
+    NSString *caches = [container stringByAppendingPathComponent:@"Library/Caches"];
+    NSArray<NSString *> *names = [NSFileManager.defaultManager
+        contentsOfDirectoryAtPath:caches error:nil];
+    NSMutableOrderedSet<NSString *> *result = [NSMutableOrderedSet orderedSet];
+    BOOL reachedLimit = NO;
+    for (NSString *name in names ?: @[]) {
+        if (![name hasPrefix:@"com.apple.LaunchServices-"] ||
+            ![name hasSuffix:@"-v2.csstore"])
+            continue;
+        NSString *path = [caches stringByAppendingPathComponent:name];
+        NSNumber *size = [[NSFileManager.defaultManager attributesOfItemAtPath:path
+            error:nil] objectForKey:NSFileSize];
+        if (!size || size.unsignedLongLongValue == 0 ||
+            size.unsignedLongLongValue > 64 * 1024 * 1024)
+            continue;
+        NSError *readError = nil;
+        NSData *data = [NSData dataWithContentsOfFile:path
+            options:NSDataReadingMappedIfSafe error:&readError];
+        if (!data) {
+            NSLog(@"[MCMFilza] LaunchServices store read failed path=%@ error=%@",
+                  path, readError);
+            continue;
+        }
+        const uint8_t *bytes = data.bytes;
+        NSUInteger start = NSNotFound;
+        for (NSUInteger index = 0; index <= data.length; index++) {
+            BOOL allowed = index < data.length &&
+                MCMLaunchServicesIdentifierByte(bytes[index]);
+            if (allowed) {
+                if (start == NSNotFound) start = index;
+                continue;
+            }
+            if (start == NSNotFound) continue;
+            NSUInteger length = index - start;
+            if (length >= 3 && length <= 255) {
+                NSString *identifier = [[NSString alloc]
+                    initWithBytes:bytes + start length:length
+                    encoding:NSUTF8StringEncoding];
+                BOOL malformedDots = [identifier containsString:@".."];
+                BOOL looksLikeIdentifier = MCMSafeIdentifier(identifier) &&
+                    [identifier containsString:@"."] &&
+                    ![identifier hasPrefix:@"."] &&
+                    ![identifier hasSuffix:@"."] && !malformedDots;
+                if (looksLikeIdentifier) {
+                    [result addObject:identifier];
+                    if (result.count >= kMaximumCandidateCount) {
+                        reachedLimit = YES;
+                        break;
+                    }
+                }
+            }
+            start = NSNotFound;
+        }
+        NSLog(@"[MCMFilza] LaunchServices store path=%@ bytes=%lu candidates=%lu",
+              path, (unsigned long)data.length, (unsigned long)result.count);
+        if (reachedLimit) break;
+    }
+    if (reachedLimit)
+        NSLog(@"[MCMFilza] LaunchServices store candidate limit reached");
+    NSLog(@"[MCMFilza] LaunchServices store total candidates=%lu",
+          (unsigned long)result.count);
+    MCMLogExpectedIdentifierCoverage(@"LaunchServices store",
+        [NSSet setWithArray:result.array]);
+    return result.array;
+}
+
 static NSArray<NSString *> *MCMInstalledApplicationIdentifiers(void)
 {
     Class workspaceClass = NSClassFromString(@"LSApplicationWorkspace");
@@ -704,23 +850,59 @@ static NSArray<NSString *> *MCMInstalledApplicationIdentifiers(void)
     for (id proxy in applications) {
         NSString *identifier = [proxy respondsToSelector:@selector(applicationIdentifier)]
             ? [proxy applicationIdentifier] : nil;
+        if (!MCMSafeIdentifier(identifier) &&
+            [proxy respondsToSelector:@selector(bundleIdentifier)])
+            identifier = [proxy bundleIdentifier];
         if (MCMSafeIdentifier(identifier)) [result addObject:identifier];
         if (result.count >= 1024) break;
     }
+
     return result.array;
 }
 
 static NSArray<NSString *> *MCMResearchTargetIdentifiers(void)
 {
-    // LaunchServices intentionally returns an empty installed-app list to this
-    // jailed host on the tested build. Seed only the targets used by this
-    // controlled research workspace; nonexistent identifiers fail closed.
+    // Enumeration via container_query_iterate_results_sync returns near-empty
+    // results on iOS 26 even though direct lookups succeed. Seed all known
+    // first-party identifiers so the MHA bypass can resolve them by name.
     return @[
-        @"com.yourcompany.PPClient",
-        @"com.bankofamerica.BofA",
-        @"com.apple.mobilenotes",
         @"com.apple.mobilesafari",
-        @"local.research.SandboxCanaryVictim",
+        @"com.apple.mobilenotes",
+        @"com.apple.Maps",
+        @"com.apple.facetime",
+        @"com.apple.iBooks",
+        @"com.apple.podcasts",
+        @"com.apple.PosterBoard",
+        @"com.apple.mobilemail",
+        @"com.apple.weather",
+        @"com.apple.camera",
+        @"com.apple.Health",
+        @"com.apple.Fitness",
+        @"com.apple.tips",
+        @"com.apple.Passbook",
+        @"com.apple.reminders",
+        @"com.apple.stocks",
+        @"com.apple.news",
+        @"com.apple.Home",
+        @"com.apple.tv",
+        @"com.apple.shortcuts",
+        @"com.apple.freeform",
+        @"com.apple.calculator",
+        @"com.apple.MobileSMS",
+        @"com.apple.InCallService",
+        @"com.apple.Preferences",
+        @"com.apple.springboard",
+        @"com.apple.Photos",
+        @"com.apple.AppStore",
+        @"com.apple.Music",
+        @"com.apple.Bridge",
+        @"com.apple.Clock",
+        @"com.apple.VoiceMemos",
+        @"com.apple.Translate",
+        @"com.apple.measure",
+        @"com.apple.compass",
+        @"com.apple.Magnifier",
+        @"com.apple.DocumentsApp",
     ];
 }
 
@@ -752,6 +934,11 @@ static NSArray<NSString *> *MCMDynamicIdentifiers(uint64_t containerClass)
 
 static NSDictionary *MCMCustomIdentifiers(void)
 {
+    if (getenv("FILZA_MCM_IGNORE_CUSTOM_IDENTIFIERS")) {
+        NSMutableDictionary *empty = [NSMutableDictionary dictionary];
+        for (NSString *key in MCMCustomIdentifierKeys()) empty[key] = @[];
+        return empty;
+    }
     NSString *documentsPath = [MCMFilzaVirtualRoot().stringByDeletingLastPathComponent
         stringByAppendingPathComponent:@"MCMIdentifiers.plist"];
     NSString *bundlePath = [NSBundle.mainBundle pathForResource:@"MCMIdentifiers"
@@ -1131,10 +1318,13 @@ void MCMFilzaStart(void)
                                       experimental])
             [fm createDirectoryAtPath:directory withIntermediateDirectories:YES
                            attributes:@{NSFilePosixPermissions: @0700} error:nil];
+        MCMResetAppLinksForTesting(apps);
 
         NSMutableOrderedSet *appIdentifiers = [NSMutableOrderedSet orderedSetWithArray:
             MCMDynamicIdentifiers(2)];
         [appIdentifiers addObjectsFromArray:MCMInstalledApplicationIdentifiers()];
+        NSArray<NSString *> *launchServicesIdentifiers =
+            MCMLaunchServicesStoreIdentifiers();
         // Keep the proven targets as a compatibility fallback when metadata
         // enumeration is denied or incomplete on a particular build.
         [appIdentifiers addObjectsFromArray:MCMResearchTargetIdentifiers()];
@@ -1143,8 +1333,19 @@ void MCMFilzaStart(void)
             if ([value isKindOfClass:NSString.class] && MCMSafeIdentifier(value)) [appIdentifiers addObject:value];
         for (NSString *identifier in appIdentifiers)
             MCMInstallLink(apps, identifier, 2, NO);
+        for (NSString *identifier in launchServicesIdentifiers)
+            if (![appIdentifiers containsObject:identifier])
+                MCMInstallLinkWithFailureLogging(apps, identifier, 2, NO, NO);
+        MCMLogExpectedIdentifierCoverage(@"App Data links",
+            [NSSet setWithArray:[fm contentsOfDirectoryAtPath:apps error:nil] ?: @[]]);
         NSMutableOrderedSet *groupIdentifiers = [NSMutableOrderedSet orderedSetWithArray:
             MCMDynamicIdentifiers(7)];
+        [groupIdentifiers addObjectsFromArray:@[
+            @"group.com.apple.notes",
+            @"group.com.apple.safari",
+            @"group.com.apple.weather",
+            @"group.com.apple.stocks",
+        ]];
         for (id value in [custom[@"AppGroups"] isKindOfClass:NSArray.class] ? custom[@"AppGroups"] : @[])
             if ([value isKindOfClass:NSString.class] && MCMSafeIdentifier(value))
                 [groupIdentifiers addObject:value];
@@ -1171,10 +1372,13 @@ void MCMFilzaStart(void)
             @{@"Directory": serviceData, @"Class": @10, @"Group": @(NO),
               @"CustomKey": @"ServiceData", @"Fallback": @[
                   @"com.apple.swcd", @"com.apple.familycircled",
-                  @"com.apple.locationd"]},
+                  @"com.apple.locationd", @"com.apple.installd",
+                  @"com.apple.accountsd", @"com.apple.itunescloudd",
+                  @"com.apple.nanonewscd"]},
             @{@"Directory": systemData, @"Class": @12, @"Group": @(NO),
               @"CustomKey": @"SystemData", @"Fallback": @[
-                  @"com.apple.eligibilityd", @"com.apple.geod"]},
+                  @"com.apple.eligibilityd", @"com.apple.geod",
+                  @"com.apple.springboard"]},
             @{@"Directory": systemGroups, @"Class": @13, @"Group": @(YES),
               @"CustomKey": @"SystemGroups", @"Fallback": @[
                   @"systemgroup.com.apple.configurationprofiles",

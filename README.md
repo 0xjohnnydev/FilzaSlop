@@ -78,6 +78,19 @@ com.apple.mobile.MobileHouseArrest
 
 Changing it disables the MobileHouseArrest path.
 
+## iOS 26 app discovery
+
+iOS 26 can hide third-party apps from the normal ContainerManager and
+LaunchServices enumeration APIs. FilzaSlop now reads the device-local
+LaunchServices store through the accessible `com.apple.lsd` service container.
+It extracts bundle identifier candidates and confirms each candidate with a
+direct class-2 ContainerManager lookup. The release IPA does not need a device
+catalog.
+
+`MCMIdentifiers.plist` remains an optional manual fallback. You can generate
+one with `scripts/refresh_device_catalog.sh` and pass it as the third release
+build argument.
+
 ## Build
 
 ```sh
@@ -87,6 +100,14 @@ make package FINALPACKAGE=1
 ```
 
 Inject `FilzaApplySandboxExt.dylib` into Filza and sign the app.
+
+To build the unsigned release IPA:
+
+```sh
+./scripts/build_release_ipa.sh \
+  FilzaSlop-v1.0.0-unsigned.ipa \
+  FilzaSlop-v1.0.1-unsigned.ipa
+```
 
 ## PoCs
 
