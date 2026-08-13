@@ -102,16 +102,17 @@ and current sources, ask in the
 [r/Jailbreak Discord](https://discord.com/invite/jb) or check
 [r/sideloaded](https://www.reddit.com/r/sideloaded/) before paying.
 
-#### LiveContainer fallback
+#### Experimental LiveContainer compatibility
 
-Free-account users can run the unsigned IPA as a guest in
+Free-account users can try the unsigned IPA as a guest in
 [LiveContainer](https://github.com/LiveContainer/LiveContainer):
 
 > [!WARNING]
-> LiveContainer mode does **not** provide MobileHouseArrest access. FilzaSlop
-> cannot browse or edit containers for App Store apps or other apps installed
-> by iOS. It can access only guest apps and data stored inside LiveContainer.
-> Use this mode only to manage LiveContainer content.
+> LiveContainer compatibility is **experimental**. This mode does **not**
+> provide MobileHouseArrest access. FilzaSlop cannot browse or edit containers
+> for App Store apps or other apps installed by iOS. It can access only guest
+> apps and data stored inside LiveContainer. Use this mode only to manage
+> LiveContainer content.
 
 1. Install LiveContainer with SideStore or AltStore using its normal automatic
    bundle ID.
