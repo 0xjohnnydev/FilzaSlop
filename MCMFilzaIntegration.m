@@ -30,6 +30,65 @@ static NSString *const kMCMWallpaperLabDirectoryName = @"[MHA-C2] Wallpaper Lab"
 static NSMutableDictionary<NSString *, MCMLease *> *gLeases;
 static BOOL gUnrestrictedFilesystem;
 
+typedef CFTypeRef SecTaskRef;
+extern SecTaskRef SecTaskCreateFromSelf(CFAllocatorRef allocator);
+extern CFStringRef SecTaskCopySigningIdentifier(SecTaskRef task, CFErrorRef *error);
+
+static NSString *MCMSignedCodeIdentifier(void)
+{
+    static NSString *identifier;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        SecTaskRef task = SecTaskCreateFromSelf(kCFAllocatorDefault);
+        if (!task) return;
+        CFErrorRef error = NULL;
+        CFStringRef value = SecTaskCopySigningIdentifier(task, &error);
+        if (value) identifier = [(__bridge NSString *)value copy];
+        if (value) CFRelease(value);
+        if (error) CFRelease(error);
+        CFRelease(task);
+    });
+    return identifier;
+}
+
+BOOL MCMFilzaIsRunningInLiveContainer(void)
+{
+    const char *home = getenv("LC_HOME_PATH");
+    return home && home[0] == '/';
+}
+
+static NSString *MCMAbsoluteEnvironmentPath(const char *name)
+{
+    const char *value = getenv(name);
+    if (!value || value[0] != '/') return nil;
+    NSString *path = [NSString stringWithUTF8String:value];
+    return path.length ? path.stringByStandardizingPath : nil;
+}
+
+static NSString *MCMLiveContainerAppGroupPath(void)
+{
+    SEL selector = NSSelectorFromString(@"lcAppGroupPath");
+    Class defaults = NSUserDefaults.class;
+    if (![defaults respondsToSelector:selector]) return nil;
+    id value = ((id (*)(id, SEL))objc_msgSend)(defaults, selector);
+    return [value isKindOfClass:NSString.class] && [value isAbsolutePath]
+        ? [value stringByStandardizingPath] : nil;
+}
+
+static NSArray<NSString *> *MCMLiveContainerAuthorityRoots(void)
+{
+    if (!MCMFilzaIsRunningInLiveContainer()) return @[];
+    NSMutableOrderedSet<NSString *> *roots = [NSMutableOrderedSet orderedSet];
+    for (NSString *path in @[
+        MCMAbsoluteEnvironmentPath("LC_HOME_PATH") ?: @"",
+        MCMAbsoluteEnvironmentPath("HOME") ?: @"",
+        MCMLiveContainerAppGroupPath() ?: @"",
+    ]) {
+        if (path.length) [roots addObject:path];
+    }
+    return roots.array;
+}
+
 void MCMFilzaSetUnrestrictedFilesystem(BOOL enabled)
 {
     gUnrestrictedFilesystem = enabled;
@@ -50,6 +109,12 @@ static void MCMEnsureState(void)
 
 NSString *MCMFilzaVirtualRoot(void)
 {
+    if (MCMFilzaIsRunningInLiveContainer()) {
+        NSString *home = MCMAbsoluteEnvironmentPath("HOME");
+        if (home.length)
+            return [[home stringByAppendingPathComponent:@"Documents"]
+                stringByAppendingPathComponent:@"Device Storage"];
+    }
     NSString *documents = NSSearchPathForDirectoriesInDomains(
         NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
     return [documents stringByAppendingPathComponent:@"Device Storage"];
@@ -85,8 +150,8 @@ static NSString *MCMActivate(uint64_t containerClass, NSString *identifier,
                              BOOL group, NSString **error)
 {
     MCMEnsureState();
-    if (![NSBundle.mainBundle.bundleIdentifier isEqualToString:kRequiredIdentifier]) {
-        if (error) *error = @"host bundle identifier is not the required MCM caller identity";
+    if (![MCMSignedCodeIdentifier() isEqualToString:kRequiredIdentifier]) {
+        if (error) *error = @"signed code identifier is not the required MCM caller identity";
         return nil;
     }
     if (!MCMSafeIdentifier(identifier)) {
@@ -132,8 +197,8 @@ static NSString *MCMActivateScoped(uint64_t containerClass, NSString *identifier
                                    NSString **error)
 {
     MCMEnsureState();
-    if (![NSBundle.mainBundle.bundleIdentifier isEqualToString:kRequiredIdentifier]) {
-        if (error) *error = @"host bundle identifier is not the required MCM caller identity";
+    if (![MCMSignedCodeIdentifier() isEqualToString:kRequiredIdentifier]) {
+        if (error) *error = @"signed code identifier is not the required MCM caller identity";
         return nil;
     }
     if (!MCMSafeIdentifier(identifier)) {
@@ -205,12 +270,81 @@ BOOL MCMFilzaPathHasActiveLease(NSString *path)
     if (MCMPathIsInsideRoot(path, experimentalRoot) ||
         MCMPathIsInsideRoot(path, filesTraversalRoot)) return NO;
     if (MCMPathIsInsideRoot(path, virtualRoot)) return YES;
+    if (MCMFilzaIsRunningInLiveContainer()) {
+        for (NSString *root in MCMLiveContainerAuthorityRoots())
+            if (MCMPathIsInsideRoot(path, root)) return YES;
+        return NO;
+    }
     MCMEnsureState();
     @synchronized (gLeases) {
         for (MCMLease *lease in gLeases.allValues)
             if (lease.activated && MCMPathIsInsideRoot(path, lease.rootPath)) return YES;
     }
     return NO;
+}
+
+static void MCMInstallLiveContainerLink(NSFileManager *manager, NSString *root,
+                                        NSString *name, NSString *target)
+{
+    if (!target.length || !target.isAbsolutePath) return;
+    BOOL isDirectory = NO;
+    if (![manager fileExistsAtPath:target isDirectory:&isDirectory] || !isDirectory)
+        return;
+
+    NSString *link = [root stringByAppendingPathComponent:name];
+    struct stat status = {0};
+    if (lstat(link.fileSystemRepresentation, &status) == 0) {
+        if (!S_ISLNK(status.st_mode)) {
+            NSLog(@"[LiveContainer] keeping non-link path %@", link);
+            return;
+        }
+        if (unlink(link.fileSystemRepresentation) != 0) {
+            NSLog(@"[LiveContainer] could not refresh link %@ errno=%d", link, errno);
+            return;
+        }
+    }
+    if (symlink(target.fileSystemRepresentation, link.fileSystemRepresentation) != 0)
+        NSLog(@"[LiveContainer] link failed %@ -> %@ errno=%d", link, target, errno);
+    else
+        NSLog(@"[LiveContainer] linked %@ -> %@", link, target);
+}
+
+static void MCMInstallLiveContainerRoot(void)
+{
+    NSFileManager *manager = NSFileManager.defaultManager;
+    NSString *root = MCMFilzaVirtualRoot();
+    [manager createDirectoryAtPath:root withIntermediateDirectories:YES
+                        attributes:@{NSFilePosixPermissions: @0700} error:nil];
+
+    NSString *hostHome = MCMAbsoluteEnvironmentPath("LC_HOME_PATH");
+    NSString *hostDocuments = [hostHome stringByAppendingPathComponent:@"Documents"];
+    NSString *sharedRoot = [MCMLiveContainerAppGroupPath()
+        stringByAppendingPathComponent:@"LiveContainer"];
+
+    NSArray<NSArray<NSString *> *> *links = @[
+        @[@"[LiveContainer] Local Apps",
+          [hostDocuments stringByAppendingPathComponent:@"Applications"] ?: @""],
+        @[@"[LiveContainer] Local App Data",
+          [hostDocuments stringByAppendingPathComponent:@"Data/Application"] ?: @""],
+        @[@"[LiveContainer] Local App Groups",
+          [hostDocuments stringByAppendingPathComponent:@"Data/AppGroup"] ?: @""],
+        @[@"[LiveContainer] Shared Apps",
+          [sharedRoot stringByAppendingPathComponent:@"Applications"] ?: @""],
+        @[@"[LiveContainer] Shared App Data",
+          [sharedRoot stringByAppendingPathComponent:@"Data/Application"] ?: @""],
+        @[@"[LiveContainer] Shared App Groups",
+          [sharedRoot stringByAppendingPathComponent:@"Data/AppGroup"] ?: @""],
+    ];
+    for (NSArray<NSString *> *entry in links)
+        MCMInstallLiveContainerLink(manager, root, entry[0], entry[1]);
+
+    NSString *readme = @"LiveContainer compatibility mode\n\n"
+        @"These links expose apps and data stored by this LiveContainer.\n"
+        @"Edits affect the live guest containers.\n\n"
+        @"The process still uses LiveContainer's signed identity. "
+         "It cannot receive MobileHouseArrest access to system app containers.\n";
+    [readme writeToFile:[root stringByAppendingPathComponent:@"README.txt"]
+              atomically:YES encoding:NSUTF8StringEncoding error:nil];
 }
 
 static void MCMInstallLinkWithFailureLogging(NSString *directory,
@@ -1275,9 +1409,14 @@ void MCMFilzaStart(void)
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         MCMEnsureState();
-        NSString *actual = NSBundle.mainBundle.bundleIdentifier;
+        if (MCMFilzaIsRunningInLiveContainer()) {
+            MCMInstallLiveContainerRoot();
+            return;
+        }
+        NSString *actual = MCMSignedCodeIdentifier();
         if (![actual isEqualToString:kRequiredIdentifier]) {
-            NSLog(@"[MCMFilza] disabled: bundle identifier %@ must be %@", actual, kRequiredIdentifier);
+            NSLog(@"[MCMFilza] disabled: signed code identifier %@ must be %@ (bundle=%@)",
+                  actual, kRequiredIdentifier, NSBundle.mainBundle.bundleIdentifier);
             return;
         }
         if (!MCMBridgeAvailable()) {

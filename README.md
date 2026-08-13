@@ -48,26 +48,6 @@ FilzaJailedDS fork with:
 /private/var/mobile/Containers/Shared/AppGroup/<Safari-group-UUID>/
 ```
 
-## PosterBoard
-
-Wallpaper Lab can:
-
-- Inspect the PosterBoard descriptor store.
-- Import the bundled Cipher wallpaper.
-- Import extracted `.tendies` wallpaper packages.
-- Apply the PosterBoard refresh preferences.
-- Roll back the latest import.
-
-Place additional packages in:
-
-```text
-Documents/Device Storage/[MHA-C2] Wallpaper Lab/Imports/
-```
-
-Use the **Wallpaper** button at the Wallpaper Lab root. Imports add new
-descriptor directories and keep a rollback backup. They do not overwrite the
-PosterBoard database or existing descriptors.
-
 ## Signing
 
 Keep this bundle and CodeDirectory identifier:
@@ -77,6 +57,64 @@ com.apple.mobile.MobileHouseArrest
 ```
 
 Changing it disables the MobileHouseArrest path.
+
+### Free Apple Accounts
+
+A free Apple Account, also called a Personal Team, cannot currently sign the
+standalone IPA while keeping the identity required by the MobileHouseArrest
+path.
+
+The app needs the same value for both identifiers:
+
+```text
+CFBundleIdentifier:       com.apple.mobile.MobileHouseArrest
+CodeDirectory identifier: com.apple.mobile.MobileHouseArrest
+```
+
+Free-account sideloading tools normally register a new App ID. Apple rejects
+the identifier above with error `9400` or `9401`. Allowing the signer to create
+a unique bundle ID can make the app install, but it disables MobileHouseArrest
+container access. Giving the app a normal bundle ID while keeping the
+MobileHouseArrest CodeDirectory identifier also does not work. iOS rejects that
+combination with `MismatchedBundleIDSigningIdentifier` before launch.
+
+Do not use **automatic bundle ID** if you expect standalone MobileHouseArrest
+access. A successful install with a changed identifier is not a working
+sandbox escape.
+
+#### Paid certificate providers
+
+Some users buy device-bound certificate and provisioning files from providers
+such as [ArcticSign](https://arcticsign.app/). These providers are independent
+of this project, and Apple can revoke their certificates. For more reputable
+and current sources, ask in the
+[r/Jailbreak Discord](https://discord.com/invite/jb) or check
+[r/sideloaded](https://www.reddit.com/r/sideloaded/) before paying.
+
+#### LiveContainer fallback
+
+Free-account users can run the unsigned IPA as a guest in
+[LiveContainer](https://github.com/LiveContainer/LiveContainer):
+
+1. Install LiveContainer with SideStore or AltStore using its normal automatic
+   bundle ID.
+2. Download the unsigned FilzaSlop IPA from the Releases page.
+3. Open LiveContainer, tap the plus button, and select the IPA.
+4. On iOS 26 or later, configure LiveContainer's JIT-less mode by importing the
+   certificate from SideStore or AltStore.
+5. Refresh LiveContainer before its seven-day Personal Team profile expires.
+
+This fallback does not give the host process the MobileHouseArrest identity.
+It exposes only the app and data containers stored inside LiveContainer. It
+does not expose the containers of apps installed by iOS.
+
+Apple limits a Personal Team to three installed apps per device, ten registered
+App IDs, and seven-day provisioning profiles. LiveContainer uses one installed
+app and one App ID for its guest apps. See Apple's
+[developer account overview](https://developer.apple.com/help/account/basics/about-your-developer-account),
+the [Sideloadly FAQ](https://sideloadly.io/faq.html), and the
+[LiveContainer documentation](https://github.com/LiveContainer/LiveContainer)
+for current setup and refresh details.
 
 ## iOS 26 app discovery
 
