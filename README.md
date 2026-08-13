@@ -48,6 +48,17 @@ FilzaJailedDS fork with:
 /private/var/mobile/Containers/Shared/AppGroup/<Safari-group-UUID>/
 ```
 
+### Archive
+
+The **Archive** action moves selected items to the app's own archive folder:
+
+```text
+Documents/FilzaSlop Archive/
+```
+
+Open the **Archive** alias on the Device Storage landing page to restore or
+delete archived items.
+
 ## Signing
 
 Keep this bundle and CodeDirectory identifier:
@@ -96,6 +107,12 @@ and current sources, ask in the
 Free-account users can run the unsigned IPA as a guest in
 [LiveContainer](https://github.com/LiveContainer/LiveContainer):
 
+> [!WARNING]
+> LiveContainer mode does **not** provide MobileHouseArrest access. FilzaSlop
+> cannot browse or edit containers for App Store apps or other apps installed
+> by iOS. It can access only guest apps and data stored inside LiveContainer.
+> Use this mode only to manage LiveContainer content.
+
 1. Install LiveContainer with SideStore or AltStore using its normal automatic
    bundle ID.
 2. Download the unsigned FilzaSlop IPA from the Releases page.
@@ -103,10 +120,6 @@ Free-account users can run the unsigned IPA as a guest in
 4. On iOS 26 or later, configure LiveContainer's JIT-less mode by importing the
    certificate from SideStore or AltStore.
 5. Refresh LiveContainer before its seven-day Personal Team profile expires.
-
-This fallback does not give the host process the MobileHouseArrest identity.
-It exposes only the app and data containers stored inside LiveContainer. It
-does not expose the containers of apps installed by iOS.
 
 Apple limits a Personal Team to three installed apps per device, ten registered
 App IDs, and seven-day provisioning profiles. LiveContainer uses one installed

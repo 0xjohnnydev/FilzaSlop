@@ -6,6 +6,7 @@
 #import <notify.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
+#import <stdio.h>
 #import <stdlib.h>
 #import <string.h>
 #import <sys/stat.h>
@@ -27,6 +28,8 @@ static NSString *const kMCMAdditionalLocationsDirectoryName =
 static NSString *const kMCMExperimentalDirectoryName =
     @"[MHA-Mixed EXP] Experimental";
 static NSString *const kMCMWallpaperLabDirectoryName = @"[MHA-C2] Wallpaper Lab";
+static NSString *const kMCMDeletedGeneratedPathsKey =
+    @"FilzaSlopDeletedGeneratedPaths";
 static NSMutableDictionary<NSString *, MCMLease *> *gLeases;
 static BOOL gUnrestrictedFilesystem;
 
@@ -118,6 +121,101 @@ NSString *MCMFilzaVirtualRoot(void)
     NSString *documents = NSSearchPathForDirectoriesInDomains(
         NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
     return [documents stringByAppendingPathComponent:@"Device Storage"];
+}
+
+NSString *MCMFilzaArchivePath(void)
+{
+    return [[MCMFilzaVirtualRoot() stringByDeletingLastPathComponent]
+        stringByAppendingPathComponent:@"FilzaSlop Archive"];
+}
+
+static NSString *MCMGeneratedPathKey(NSString *path)
+{
+    if (!path.length || !path.isAbsolutePath) return nil;
+    NSString *root = MCMFilzaVirtualRoot().stringByStandardizingPath;
+    NSString *candidate = path.stringByStandardizingPath;
+    NSString *prefix = [root stringByAppendingString:@"/"];
+    if (![candidate hasPrefix:prefix]) return nil;
+    return [candidate substringFromIndex:prefix.length];
+}
+
+static NSSet<NSString *> *MCMDeletedGeneratedPaths(void)
+{
+    NSArray *values = [NSUserDefaults.standardUserDefaults
+        arrayForKey:kMCMDeletedGeneratedPathsKey];
+    return [NSSet setWithArray:[values isKindOfClass:NSArray.class] ? values : @[]];
+}
+
+static BOOL MCMGeneratedPathWasDeleted(NSString *path)
+{
+    NSString *key = MCMGeneratedPathKey(path);
+    return key.length > 0 && [MCMDeletedGeneratedPaths() containsObject:key];
+}
+
+void MCMFilzaRecordDeletedGeneratedPath(NSString *path)
+{
+    NSString *key = MCMGeneratedPathKey(path);
+    if (!key.length) return;
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    @synchronized (defaults) {
+        NSMutableOrderedSet<NSString *> *values = [NSMutableOrderedSet
+            orderedSetWithArray:[defaults arrayForKey:kMCMDeletedGeneratedPathsKey]
+                ?: @[]];
+        if ([values containsObject:key]) return;
+        [values addObject:key];
+        [defaults setObject:values.array forKey:kMCMDeletedGeneratedPathsKey];
+        [defaults synchronize];
+    }
+    NSLog(@"[GeneratedFiles] recorded deletion %@", key);
+}
+
+static BOOL MCMWriteGeneratedString(NSString *text, NSString *path)
+{
+    if (MCMGeneratedPathWasDeleted(path)) {
+        NSLog(@"[GeneratedFiles] kept deleted path absent %@", path);
+        return NO;
+    }
+    return [text writeToFile:path atomically:YES
+                    encoding:NSUTF8StringEncoding error:nil];
+}
+
+static BOOL MCMWriteGeneratedPropertyList(id value, NSString *path)
+{
+    if (MCMGeneratedPathWasDeleted(path)) {
+        NSLog(@"[GeneratedFiles] kept deleted path absent %@", path);
+        return NO;
+    }
+    return [value writeToFile:path atomically:YES];
+}
+
+static void MCMRunGeneratedDeletionProbe(NSFileManager *manager, NSString *root)
+{
+    const char *phaseValue = getenv("FILZA_GENERATED_DELETE_PROBE");
+    if (!phaseValue || !phaseValue[0]) return;
+    NSString *phase = [NSString stringWithUTF8String:phaseValue];
+    if (![phase isEqualToString:@"record"] &&
+        ![phase isEqualToString:@"verify"]) return;
+
+    NSString *path = [root
+        stringByAppendingPathComponent:@".filzaslop-generated-delete-probe.txt"];
+    BOOL setup = YES;
+    if ([phase isEqualToString:@"record"]) {
+        [manager removeItemAtPath:path error:nil];
+        setup = [@"probe" writeToFile:path atomically:YES
+                              encoding:NSUTF8StringEncoding error:nil];
+        MCMFilzaRecordDeletedGeneratedPath(path);
+        setup = [manager removeItemAtPath:path error:nil] && setup;
+    }
+
+    BOOL writeResult = MCMWriteGeneratedString(@"must stay deleted", path);
+    BOOL exists = [manager fileExistsAtPath:path];
+    BOOL recorded = [MCMDeletedGeneratedPaths()
+        containsObject:MCMGeneratedPathKey(path)];
+    BOOL passed = setup && !writeResult && !exists && recorded;
+    fprintf(stderr,
+        "[GeneratedDeleteProbe] phase=%s setup=%d write=%d exists=%d recorded=%d pass=%d\n",
+        phase.UTF8String, setup, writeResult, exists, recorded, passed);
+    fflush(stderr);
 }
 
 NSString *MCMFilzaWallpaperLabName(void)
@@ -269,7 +367,8 @@ BOOL MCMFilzaPathHasActiveLease(NSString *path)
     // local paste path from turning a traversal check into a target mutation.
     if (MCMPathIsInsideRoot(path, experimentalRoot) ||
         MCMPathIsInsideRoot(path, filesTraversalRoot)) return NO;
-    if (MCMPathIsInsideRoot(path, virtualRoot)) return YES;
+    if (MCMPathIsInsideRoot(path, virtualRoot) ||
+        MCMPathIsInsideRoot(path, MCMFilzaArchivePath())) return YES;
     if (MCMFilzaIsRunningInLiveContainer()) {
         for (NSString *root in MCMLiveContainerAuthorityRoots())
             if (MCMPathIsInsideRoot(path, root)) return YES;
@@ -309,12 +408,42 @@ static void MCMInstallLiveContainerLink(NSFileManager *manager, NSString *root,
         NSLog(@"[LiveContainer] linked %@ -> %@", link, target);
 }
 
+static void MCMInstallArchiveAlias(NSFileManager *manager, NSString *root)
+{
+    NSString *archive = MCMFilzaArchivePath();
+    NSError *error = nil;
+    if (![manager createDirectoryAtPath:archive withIntermediateDirectories:YES
+                             attributes:@{NSFilePosixPermissions: @0700}
+                                  error:&error]) {
+        NSLog(@"[Archive] directory creation failed path=%@ error=%@", archive, error);
+        return;
+    }
+
+    NSString *link = [root stringByAppendingPathComponent:@"Archive"];
+    struct stat status = {0};
+    if (lstat(link.fileSystemRepresentation, &status) == 0) {
+        if (!S_ISLNK(status.st_mode)) {
+            NSLog(@"[Archive] keeping non-link path %@", link);
+            return;
+        }
+        if (unlink(link.fileSystemRepresentation) != 0) {
+            NSLog(@"[Archive] stale alias removal failed path=%@ errno=%d", link, errno);
+            return;
+        }
+    }
+    if (symlink(archive.fileSystemRepresentation, link.fileSystemRepresentation) != 0)
+        NSLog(@"[Archive] alias failed %@ -> %@ errno=%d", link, archive, errno);
+    else
+        NSLog(@"[Archive] alias ready %@ -> %@", link, archive);
+}
+
 static void MCMInstallLiveContainerRoot(void)
 {
     NSFileManager *manager = NSFileManager.defaultManager;
     NSString *root = MCMFilzaVirtualRoot();
     [manager createDirectoryAtPath:root withIntermediateDirectories:YES
                         attributes:@{NSFilePosixPermissions: @0700} error:nil];
+    MCMInstallArchiveAlias(manager, root);
 
     NSString *hostHome = MCMAbsoluteEnvironmentPath("LC_HOME_PATH");
     NSString *hostDocuments = [hostHome stringByAppendingPathComponent:@"Documents"];
@@ -343,8 +472,8 @@ static void MCMInstallLiveContainerRoot(void)
         @"Edits affect the live guest containers.\n\n"
         @"The process still uses LiveContainer's signed identity. "
          "It cannot receive MobileHouseArrest access to system app containers.\n";
-    [readme writeToFile:[root stringByAppendingPathComponent:@"README.txt"]
-              atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    MCMWriteGeneratedString(readme,
+        [root stringByAppendingPathComponent:@"README.txt"]);
 }
 
 static void MCMInstallLinkWithFailureLogging(NSString *directory,
@@ -668,10 +797,10 @@ static void MCMInstallFilesTraversalFolder(NSString *directory)
         @"Files resolves the relative links with its own authority. Filza remains sandboxed, so a portal can look blank or fail when opened inside Filza even when it works in Files.\n\n"
         @"These links point to live data. Create, copy, rename, move, and delete operations in Files can change another app's real container. Viewing is safest. This folder does not install a .Trash link.\n\n"
         @"Portal Results.plist records link targets and checks made by Filza itself. EPERM in SourceAppTargetStatus is expected and does not predict whether Files can open a portal. Best Effort entries may be rejected by Files.\n";
-    [readme writeToFile:[directory stringByAppendingPathComponent:@"README.txt"]
-              atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    [results writeToFile:[directory
-        stringByAppendingPathComponent:@"Portal Results.plist"] atomically:YES];
+    MCMWriteGeneratedString(readme,
+        [directory stringByAppendingPathComponent:@"README.txt"]);
+    MCMWriteGeneratedPropertyList(results, [directory
+        stringByAppendingPathComponent:@"Portal Results.plist"]);
 }
 
 static NSDictionary *MCMRunExperimentalProbe(NSString *directory,
@@ -846,10 +975,10 @@ static void MCMInstallExperimentalFolder(NSString *directory)
         @"Probe setup does not create or modify target files. The custom Filza copy/paste route is disabled inside this folder.\n"
         @"The links still point at live directories; do not edit a candidate unless you have separately backed it up and planned an exact restore.\n\n"
         @"Probe Results.plist records failed queries and the read/write/open status of each expected consumer path.\n";
-    [readme writeToFile:[directory stringByAppendingPathComponent:@"README.txt"]
-              atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    [results writeToFile:[directory
-        stringByAppendingPathComponent:@"Probe Results.plist"] atomically:YES];
+    MCMWriteGeneratedString(readme,
+        [directory stringByAppendingPathComponent:@"README.txt"]);
+    MCMWriteGeneratedPropertyList(results, [directory
+        stringByAppendingPathComponent:@"Probe Results.plist"]);
 }
 
 static BOOL MCMLaunchServicesIdentifierByte(uint8_t value)
@@ -1106,7 +1235,7 @@ static void MCMWriteInstructions(void)
         @"The custom copy/paste route is disabled there, but successful links still point to live directories.\n"
         @"This build does not provide root, kernel R/W, arbitrary /var, Keychain, TCC, or app-bundle access.\n\n"
         @"Optional target configuration is documented in the research source repository.\n";
-    [text writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    MCMWriteGeneratedString(text, path);
 }
 
 static NSArray<NSDictionary<NSString *, NSString *> *> *
@@ -1197,7 +1326,7 @@ static void MCMWriteAccessReadme(NSFileManager *manager, NSString *directory,
         return;
     NSString *path = [directory
         stringByAppendingPathComponent:@"README - Access.txt"];
-    [text writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    MCMWriteGeneratedString(text, path);
 }
 
 static void MCMAppendUnifiedFindingMap(NSMutableString *map)
@@ -1377,7 +1506,7 @@ static void MCMWriteAccessMap(NSFileManager *manager, NSString *root)
          "Boundary: no arbitrary /var, Keychain, TCC, root, kernel, or app-bundle access is claimed.\n"];
 
     NSString *mapPath = [root stringByAppendingPathComponent:@"ACCESS MAP.txt"];
-    [map writeToFile:mapPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    MCMWriteGeneratedString(map, mapPath);
 }
 
 static void MCMPruneEmptyGeneratedDirectory(NSString *directory)
@@ -1457,6 +1586,7 @@ void MCMFilzaStart(void)
                                       experimental])
             [fm createDirectoryAtPath:directory withIntermediateDirectories:YES
                            attributes:@{NSFilePosixPermissions: @0700} error:nil];
+        MCMInstallArchiveAlias(fm, root);
         MCMResetAppLinksForTesting(apps);
 
         NSMutableOrderedSet *appIdentifiers = [NSMutableOrderedSet orderedSetWithArray:
@@ -1594,6 +1724,7 @@ void MCMFilzaStart(void)
         }
         MCMWriteAccessMap(fm, root);
         MCMWriteInstructions();
+        MCMRunGeneratedDeletionProbe(fm, root);
         NSError *listError = nil;
         NSArray *visibleEntries = [fm contentsOfDirectoryAtPath:root error:&listError];
         NSLog(@"[MCMFilza] ready root=%@ active_leases=%lu entries=%@ list_error=%@", root,

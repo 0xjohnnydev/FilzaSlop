@@ -815,6 +815,15 @@ static NSString *fileItemPath(id item) {
     return [value isKindOfClass:NSString.class] ? value : nil;
 }
 
+static BOOL fileItemsUseMCMOperations(NSArray *items) {
+    if (items.count == 0) return NO;
+    for (id item in items) {
+        NSString *path = fileItemPath(item);
+        if (!path.length || !MCMFilzaPathHasActiveLease(path)) return NO;
+    }
+    return YES;
+}
+
 static void showDeleteFailure(UIViewController *controller,
                               NSArray<NSError *> *errors) {
     if (errors.count == 0 || ![controller isKindOfClass:UIViewController.class]) return;
@@ -829,14 +838,183 @@ static void showDeleteFailure(UIViewController *controller,
     [controller presentViewController:alert animated:YES completion:nil];
 }
 
+static void reloadFileSystemController(id controller) {
+    SEL loadSelector = NSSelectorFromString(@"doLoadingPage");
+    if ([controller respondsToSelector:loadSelector])
+        ((void(*)(id, SEL))objc_msgSend)(controller, loadSelector);
+}
+
+static void showArchiveResult(UIViewController *controller, NSUInteger moved,
+                              NSArray<NSError *> *errors) {
+    if (![controller isKindOfClass:UIViewController.class]) return;
+    NSString *title = moved > 0
+        ? (errors.count ? @"Archive completed with errors" : @"Archived")
+        : @"Archive failed";
+    NSString *message = moved == 1
+        ? @"Moved 1 item to Documents/FilzaSlop Archive."
+        : [NSString stringWithFormat:@"Moved %lu items to Documents/FilzaSlop Archive.",
+            (unsigned long)moved];
+    if (errors.count)
+        message = [message stringByAppendingFormat:@"\n\n%@",
+            errors.firstObject.localizedDescription];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:title
+        message:message preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+        style:UIAlertActionStyleDefault handler:nil]];
+    [controller presentViewController:alert animated:YES completion:nil];
+}
+
+static NSString *uniqueArchiveDestination(NSString *directory, NSString *name) {
+    NSFileManager *manager = NSFileManager.defaultManager;
+    if (!name.length) name = @"Archived Item";
+    NSString *base = name.stringByDeletingPathExtension;
+    NSString *extension = name.pathExtension;
+    if (!base.length) base = @"Archived Item";
+    for (NSUInteger suffix = 0; suffix < 10000; suffix++) {
+        NSString *candidateName = suffix == 0 ? name
+            : [NSString stringWithFormat:@"%@ %lu", base,
+                (unsigned long)(suffix + 1)];
+        if (suffix > 0 && extension.length)
+            candidateName = [candidateName stringByAppendingPathExtension:extension];
+        NSString *candidate = [directory stringByAppendingPathComponent:candidateName];
+        if (![manager fileExistsAtPath:candidate]) return candidate;
+    }
+    return nil;
+}
+
+static dispatch_queue_t archiveQueue(void) {
+    static dispatch_queue_t queue;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        queue = dispatch_queue_create("local.filzamod.container-archive",
+                                      DISPATCH_QUEUE_SERIAL);
+    });
+    return queue;
+}
+
+static BOOL pathIsInsideArchive(NSString *path) {
+    if (!path.length) return NO;
+    NSString *candidate = [[path stringByStandardizingPath]
+        stringByResolvingSymlinksInPath];
+    NSString *archive = [[MCMFilzaArchivePath() stringByStandardizingPath]
+        stringByResolvingSymlinksInPath];
+    return [candidate isEqualToString:archive] ||
+        [candidate hasPrefix:[archive stringByAppendingString:@"/"]];
+}
+
+static void archiveSelectedItems(id controller, NSArray *indexPaths) {
+    MCMFilzaStart();
+    NSArray *items = selectedFileItems(controller, indexPaths);
+    if (items.count == 0) {
+        NSError *error = nil;
+        setPastePOSIXError(&error, EINVAL, @"archive", @"selection");
+        showArchiveResult(controller, 0, @[error]);
+        return;
+    }
+
+    NSArray *capturedItems = [items copy];
+    UIViewController *viewController = controller;
+    dispatch_async(archiveQueue(), ^{
+        NSFileManager *manager = NSFileManager.defaultManager;
+        NSString *archive = MCMFilzaArchivePath();
+        NSMutableArray<NSError *> *errors = [NSMutableArray array];
+        NSError *directoryError = nil;
+        [manager createDirectoryAtPath:archive withIntermediateDirectories:YES
+                            attributes:@{NSFilePosixPermissions: @0700}
+                                 error:&directoryError];
+        if (directoryError) [errors addObject:directoryError];
+
+        NSUInteger moved = 0;
+        if (!directoryError) for (id item in capturedItems) {
+            NSString *source = fileItemPath(item);
+            NSError *error = nil;
+            if (!source.length || !MCMFilzaPathHasActiveLease(source)) {
+                setPastePOSIXError(&error, EACCES, @"archive",
+                                   source ?: @"(unknown)");
+            } else if (pathIsInsideArchive(source)) {
+                error = [NSError errorWithDomain:NSPOSIXErrorDomain code:EINVAL
+                    userInfo:@{NSLocalizedDescriptionKey:
+                        [NSString stringWithFormat:@"%@ is already in FilzaSlop Archive.",
+                            source.lastPathComponent]}];
+            } else {
+                NSString *destination = uniqueArchiveDestination(
+                    archive, source.lastPathComponent);
+                if (!destination)
+                    setPastePOSIXError(&error, EEXIST, @"archive", source);
+                else if ([manager moveItemAtPath:source toPath:destination error:&error]) {
+                    MCMFilzaRecordDeletedGeneratedPath(source);
+                    moved++;
+                    NSLog(@"[ContainerArchive] moved %@ -> %@", source, destination);
+                }
+            }
+            if (error) {
+                [errors addObject:error];
+                NSLog(@"[ContainerArchive] failed source=%@ error=%@", source, error);
+            }
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            reloadFileSystemController(viewController);
+            showArchiveResult(viewController, moved, errors);
+            NSLog(@"[ContainerArchive] complete moved=%lu failed=%lu destination=%@",
+                  (unsigned long)moved, (unsigned long)errors.count, archive);
+        });
+    });
+}
+
+static void showPermanentDeleteConfirmation(id controller, NSArray *indexPaths,
+                                            NSUInteger itemCount) {
+    if (![controller isKindOfClass:UIViewController.class]) return;
+    NSArray *capturedIndexPaths = [indexPaths copy] ?: @[];
+    __weak id weakController = controller;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 350 * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{
+        id activeController = weakController;
+        if (![activeController isKindOfClass:UIViewController.class]) return;
+
+        NSString *message = itemCount == 1
+            ? @"This permanently deletes the item and cannot be undone. We recommend Archive first so you have a backup in Documents/FilzaSlop Archive."
+            : @"This permanently deletes the items and cannot be undone. We recommend Archive first so you have backups in Documents/FilzaSlop Archive.";
+        UIAlertController *alert = [UIAlertController
+            alertControllerWithTitle:@"Are you sure?" message:message
+            preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Archive Instead"
+            style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+                id selectedController = weakController;
+                if (selectedController)
+                    archiveSelectedItems(selectedController, capturedIndexPaths);
+            }]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Delete Permanently"
+            style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
+                id selectedController = weakController;
+                if (!selectedController) return;
+                SEL eraseSelector = NSSelectorFromString(
+                    @"doEraseSelectedIndexPaths:completion:");
+                if (![selectedController respondsToSelector:eraseSelector]) return;
+                void (^completion)(NSArray *) = ^(__unused NSArray *deleted) {
+                    reloadFileSystemController(selectedController);
+                };
+                ((void(*)(id, SEL, id, id))objc_msgSend)(
+                    selectedController, eraseSelector, capturedIndexPaths, completion);
+            }]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+            style:UIAlertActionStyleCancel handler:nil]];
+        [(UIViewController *)activeController presentViewController:alert
+            animated:YES completion:nil];
+    });
+}
+
 static IMP orig_fileSystemPageDeleteAction = NULL;
 static IMP orig_fileSystemDeleteSelectedItems = NULL;
+static IMP orig_fileSystemDoTrashSelectedItems = NULL;
 static IMP orig_fileSystemDoEraseSelectedItems = NULL;
 static IMP parentFileSystemAskDeleteItems = NULL;
+static IMP orig_pageAskDeleteItems = NULL;
+static IMP orig_pageDoTrashSelectedItems = NULL;
+static IMP orig_pageDoEraseSelectedItems = NULL;
 
 // Filza's jailed filesystem subclass replaces delete, trash, and erase with
-// no-ops. Use the normal permanent-delete UI for paths backed by an active MCM
-// lease, then perform the operation in this process instead of the root helper.
+// no-ops. Show a clear permanent-delete warning for paths backed by an active
+// MCM lease, then perform the operation in this process instead of the helper.
 static NSUInteger hook_fileSystemPageDeleteAction(id self, SEL _cmd) {
     SEL selector = NSSelectorFromString(@"currentPath");
     NSString *path = [self respondsToSelector:selector]
@@ -848,39 +1026,71 @@ static NSUInteger hook_fileSystemPageDeleteAction(id self, SEL _cmd) {
 }
 
 static void hook_fileSystemDeleteSelectedItems(id self, SEL _cmd) {
-    SEL currentPathSelector = NSSelectorFromString(@"currentPath");
-    NSString *path = [self respondsToSelector:currentPathSelector]
-        ? ((id(*)(id, SEL))objc_msgSend)(self, currentPathSelector) : nil;
-    if (!MCMFilzaPathHasActiveLease(path)) {
+    SEL selectedSelector = NSSelectorFromString(@"indexPathsForSelectedItemsOrMenu");
+    NSArray *indexPaths = [self respondsToSelector:selectedSelector]
+        ? ((id(*)(id, SEL))objc_msgSend)(self, selectedSelector) : nil;
+    if (!fileItemsUseMCMOperations(selectedFileItems(self, indexPaths))) {
         if (orig_fileSystemDeleteSelectedItems)
             ((void(*)(id, SEL))orig_fileSystemDeleteSelectedItems)(self, _cmd);
         return;
     }
-    SEL selectedSelector = NSSelectorFromString(@"indexPathsForSelectedItemsOrMenu");
-    NSArray *indexPaths = [self respondsToSelector:selectedSelector]
-        ? ((id(*)(id, SEL))objc_msgSend)(self, selectedSelector) : nil;
     SEL askSelector = NSSelectorFromString(@"askDeleteItems:");
     if ([self respondsToSelector:askSelector])
         ((void(*)(id, SEL, id))objc_msgSend)(self, askSelector, indexPaths ?: @[]);
 }
 
 static void hook_fileSystemAskDeleteItems(id self, SEL _cmd, NSArray *indexPaths) {
-    if (parentFileSystemAskDeleteItems)
-        ((void(*)(id, SEL, id))parentFileSystemAskDeleteItems)(
-            self, _cmd, indexPaths ?: @[]);
-}
-
-static void hook_fileSystemDoEraseSelectedItems(id self, SEL _cmd,
-                                                 NSArray *indexPaths,
-                                                 void (^completion)(NSArray *)) {
-    MCMFilzaStart();
     NSArray *items = selectedFileItems(self, indexPaths);
-    if (items.count == 0) {
-        if (orig_fileSystemDoEraseSelectedItems)
-            ((void(*)(id, SEL, id, id))orig_fileSystemDoEraseSelectedItems)(
-                self, _cmd, indexPaths, completion);
+    if (!fileItemsUseMCMOperations(items)) {
+        if (parentFileSystemAskDeleteItems)
+            ((void(*)(id, SEL, id))parentFileSystemAskDeleteItems)(
+                self, _cmd, indexPaths ?: @[]);
         return;
     }
+
+    NSArray *capturedIndexPaths = [indexPaths copy] ?: @[];
+    NSLog(@"[ContainerDelete] intercepted class=%@ items=%lu",
+          NSStringFromClass([self class]), (unsigned long)items.count);
+
+    NSString *message = items.count == 1
+        ? @"FilzaSlop cannot use Filza's Trash here. Archive moves this item to Documents/FilzaSlop Archive. Delete Permanently cannot be undone."
+        : @"FilzaSlop cannot use Filza's Trash here. Archive moves these items to Documents/FilzaSlop Archive. Delete Permanently cannot be undone.";
+    UIAlertController *sheet = [UIAlertController
+        alertControllerWithTitle:items.count == 1 ? @"Remove item?" : @"Remove items?"
+        message:message preferredStyle:UIAlertControllerStyleActionSheet];
+
+    __weak id weakController = self;
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Archive"
+        style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+            id controller = weakController;
+            if (controller) archiveSelectedItems(controller, capturedIndexPaths);
+        }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Delete Permanently"
+        style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
+            id controller = weakController;
+            if (!controller) return;
+            showPermanentDeleteConfirmation(controller, capturedIndexPaths,
+                                            items.count);
+        }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel"
+        style:UIAlertActionStyleCancel handler:nil]];
+
+    UIPopoverPresentationController *popover = sheet.popoverPresentationController;
+    if (popover && [self isKindOfClass:UIViewController.class]) {
+        UIView *view = ((UIViewController *)self).view;
+        popover.sourceView = view;
+        popover.sourceRect = CGRectMake(CGRectGetMidX(view.bounds),
+            CGRectGetMaxY(view.bounds), 1, 1);
+        popover.permittedArrowDirections = 0;
+    }
+    if ([self isKindOfClass:UIViewController.class])
+        [(UIViewController *)self presentViewController:sheet animated:YES completion:nil];
+}
+
+static void performPermanentDelete(id self, NSArray *indexPaths,
+                                   void (^completion)(NSArray *)) {
+    MCMFilzaStart();
+    NSArray *items = selectedFileItems(self, indexPaths);
 
     NSMutableArray *deleted = [NSMutableArray array];
     NSMutableArray<NSError *> *errors = [NSMutableArray array];
@@ -890,6 +1100,7 @@ static void hook_fileSystemDoEraseSelectedItems(id self, SEL _cmd,
         if (!path.length || !MCMFilzaPathHasActiveLease(path)) {
             setPastePOSIXError(&error, EACCES, @"delete", path ?: @"(unknown)");
         } else if ([NSFileManager.defaultManager removeItemAtPath:path error:&error]) {
+            MCMFilzaRecordDeletedGeneratedPath(path);
             [deleted addObject:item];
             NSLog(@"[ContainerDelete] deleted %@", path);
         }
@@ -902,6 +1113,62 @@ static void hook_fileSystemDoEraseSelectedItems(id self, SEL _cmd,
     showDeleteFailure(self, errors);
     NSLog(@"[ContainerDelete] complete deleted=%lu failed=%lu",
           (unsigned long)deleted.count, (unsigned long)errors.count);
+}
+
+static void hook_fileSystemDoTrashSelectedItems(id self, SEL _cmd,
+                                                 NSArray *indexPaths,
+                                                 void (^completion)(NSArray *)) {
+    NSArray *items = selectedFileItems(self, indexPaths);
+    if (!fileItemsUseMCMOperations(items)) {
+        if (orig_fileSystemDoTrashSelectedItems)
+            ((void(*)(id, SEL, id, id))orig_fileSystemDoTrashSelectedItems)(
+                self, _cmd, indexPaths, completion);
+        return;
+    }
+    hook_fileSystemAskDeleteItems(self, NSSelectorFromString(@"askDeleteItems:"),
+                                  indexPaths ?: @[]);
+    if (completion) completion(@[]);
+}
+
+static void hook_pageDoTrashSelectedItems(id self, SEL _cmd,
+                                           NSArray *indexPaths,
+                                           void (^completion)(NSArray *)) {
+    NSArray *items = selectedFileItems(self, indexPaths);
+    if (!fileItemsUseMCMOperations(items)) {
+        if (orig_pageDoTrashSelectedItems)
+            ((void(*)(id, SEL, id, id))orig_pageDoTrashSelectedItems)(
+                self, _cmd, indexPaths, completion);
+        return;
+    }
+    hook_fileSystemAskDeleteItems(self, NSSelectorFromString(@"askDeleteItems:"),
+                                  indexPaths ?: @[]);
+    if (completion) completion(@[]);
+}
+
+static void hook_fileSystemDoEraseSelectedItems(id self, SEL _cmd,
+                                                 NSArray *indexPaths,
+                                                 void (^completion)(NSArray *)) {
+    NSArray *items = selectedFileItems(self, indexPaths);
+    if (!fileItemsUseMCMOperations(items)) {
+        if (orig_fileSystemDoEraseSelectedItems)
+            ((void(*)(id, SEL, id, id))orig_fileSystemDoEraseSelectedItems)(
+                self, _cmd, indexPaths, completion);
+        return;
+    }
+    performPermanentDelete(self, indexPaths, completion);
+}
+
+static void hook_pageDoEraseSelectedItems(id self, SEL _cmd,
+                                           NSArray *indexPaths,
+                                           void (^completion)(NSArray *)) {
+    NSArray *items = selectedFileItems(self, indexPaths);
+    if (!fileItemsUseMCMOperations(items)) {
+        if (orig_pageDoEraseSelectedItems)
+            ((void(*)(id, SEL, id, id))orig_pageDoEraseSelectedItems)(
+                self, _cmd, indexPaths, completion);
+        return;
+    }
+    performPermanentDelete(self, indexPaths, completion);
 }
 
 static dispatch_queue_t pasteCopyQueue(void) {
@@ -1065,6 +1332,16 @@ static void installHooks(void) {
                 (IMP)hook_fileSystemAskDeleteItems);
         }
 
+        SEL trashSelector = NSSelectorFromString(
+            @"doTrashSelectedIndexPaths:completion:");
+        Method trashSelected = class_getInstanceMethod(fileSystemController,
+            trashSelector);
+        if (trashSelected) {
+            orig_fileSystemDoTrashSelectedItems = method_getImplementation(trashSelected);
+            method_setImplementation(trashSelected,
+                (IMP)hook_fileSystemDoTrashSelectedItems);
+        }
+
         SEL eraseSelector = NSSelectorFromString(
             @"doEraseSelectedIndexPaths:completion:");
         Method eraseSelected = class_getInstanceMethod(fileSystemController,
@@ -1078,6 +1355,34 @@ static void installHooks(void) {
 
     Class pageController = NSClassFromString(@"TGPageViewController");
     if (pageController) {
+        SEL askDeleteSelector = NSSelectorFromString(@"askDeleteItems:");
+        Method askDelete = class_getInstanceMethod(pageController, askDeleteSelector);
+        if (askDelete) {
+            orig_pageAskDeleteItems = method_getImplementation(askDelete);
+            if (!parentFileSystemAskDeleteItems)
+                parentFileSystemAskDeleteItems = orig_pageAskDeleteItems;
+            method_setImplementation(askDelete,
+                (IMP)hook_fileSystemAskDeleteItems);
+        }
+
+        SEL trashSelector = NSSelectorFromString(
+            @"doTrashSelectedIndexPaths:completion:");
+        Method trashSelected = class_getInstanceMethod(pageController, trashSelector);
+        if (trashSelected) {
+            orig_pageDoTrashSelectedItems = method_getImplementation(trashSelected);
+            method_setImplementation(trashSelected,
+                (IMP)hook_pageDoTrashSelectedItems);
+        }
+
+        SEL eraseSelector = NSSelectorFromString(
+            @"doEraseSelectedIndexPaths:completion:");
+        Method eraseSelected = class_getInstanceMethod(pageController, eraseSelector);
+        if (eraseSelected) {
+            orig_pageDoEraseSelectedItems = method_getImplementation(eraseSelected);
+            method_setImplementation(eraseSelected,
+                (IMP)hook_pageDoEraseSelectedItems);
+        }
+
         Method copyPaste = class_getInstanceMethod(pageController,
             NSSelectorFromString(@"copyFilesAndDirectoryFromPasteboard"));
         if (copyPaste) {
