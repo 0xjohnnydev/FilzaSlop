@@ -15,8 +15,6 @@ FilzaJailedDS fork with:
 
 ## Paths
 
-### Container roots
-
 ```text
 /private/var/mobile/Containers/Data/Application/
 /private/var/mobile/Containers/Shared/AppGroup/
@@ -26,38 +24,9 @@ FilzaJailedDS fork with:
 /private/var/mobile/Containers/Data/System/
 /private/var/mobile/Containers/Shared/SystemGroup/
 /private/var/mobile/Containers/Data/Protected/
-```
-
-### Additional paths
-
-```text
 /private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches/
 /private/var/containers/Shared/SystemGroup/systemgroup.com.apple.installcoordinationd/Library/InstallCoordination/
 ```
-
-### Notable app data
-
-```text
-# Notes
-/private/var/mobile/Containers/Shared/AppGroup/<Notes-group-UUID>/NoteStore.sqlite
-
-# Safari app data
-/private/var/mobile/Containers/Data/Application/<Safari-app-UUID>/
-
-# Safari shared data: group.com.apple.safari
-/private/var/mobile/Containers/Shared/AppGroup/<Safari-group-UUID>/
-```
-
-### Archive
-
-The **Archive** action moves selected items to the app's own archive folder:
-
-```text
-Documents/FilzaSlop Archive/
-```
-
-Open the **Archive** alias on the Device Storage landing page to restore or
-delete archived items.
 
 ## Signing
 
