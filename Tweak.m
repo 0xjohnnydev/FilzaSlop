@@ -609,7 +609,7 @@ static void hook_activationViewDidLoad(id self, SEL _cmd) {
     NSLog(@"[Tweak] Suppressed activation nag");
 }
 
-#pragma mark - MCM-aware local paste
+#pragma mark - MCM-aware local file operations
 
 static void setPastePOSIXError(NSError **error, int code,
                                NSString *operation, NSString *path) {
@@ -807,6 +807,119 @@ static void showPasteFailure(UIViewController *controller, NSArray<NSError *> *e
     [controller presentViewController:alert animated:YES completion:nil];
 }
 
+static NSArray *selectedFileItems(id controller, NSArray *indexPaths) {
+    SEL fileListSelector = NSSelectorFromString(@"fileList");
+    NSArray *fileList = [controller respondsToSelector:fileListSelector]
+        ? ((id(*)(id, SEL))objc_msgSend)(controller, fileListSelector) : nil;
+    if (![fileList isKindOfClass:NSArray.class] ||
+        ![indexPaths isKindOfClass:NSArray.class]) return @[];
+
+    NSMutableArray *items = [NSMutableArray array];
+    for (id value in indexPaths) {
+        if (![value isKindOfClass:NSIndexPath.class]) continue;
+        NSInteger row = [(NSIndexPath *)value row];
+        if (row >= 0 && (NSUInteger)row < fileList.count)
+            [items addObject:fileList[(NSUInteger)row]];
+    }
+    return items;
+}
+
+static NSString *fileItemPath(id item) {
+    SEL selector = NSSelectorFromString(@"filePath");
+    id value = [item respondsToSelector:selector]
+        ? ((id(*)(id, SEL))objc_msgSend)(item, selector) : nil;
+    return [value isKindOfClass:NSString.class] ? value : nil;
+}
+
+static void showDeleteFailure(UIViewController *controller,
+                              NSArray<NSError *> *errors) {
+    if (errors.count == 0 || ![controller isKindOfClass:UIViewController.class]) return;
+    NSString *message = errors.firstObject.localizedDescription ?: @"Delete failed";
+    if (errors.count > 1)
+        message = [NSString stringWithFormat:@"%lu items failed.\n%@",
+            (unsigned long)errors.count, message];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Delete failed"
+        message:message preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+        style:UIAlertActionStyleDefault handler:nil]];
+    [controller presentViewController:alert animated:YES completion:nil];
+}
+
+static IMP orig_fileSystemPageDeleteAction = NULL;
+static IMP orig_fileSystemDeleteSelectedItems = NULL;
+static IMP orig_fileSystemDoEraseSelectedItems = NULL;
+static IMP parentFileSystemAskDeleteItems = NULL;
+
+// Filza's jailed filesystem subclass replaces delete, trash, and erase with
+// no-ops. Use the normal permanent-delete UI for paths backed by an active MCM
+// lease, then perform the operation in this process instead of the root helper.
+static NSUInteger hook_fileSystemPageDeleteAction(id self, SEL _cmd) {
+    SEL selector = NSSelectorFromString(@"currentPath");
+    NSString *path = [self respondsToSelector:selector]
+        ? ((id(*)(id, SEL))objc_msgSend)(self, selector) : nil;
+    if (MCMFilzaPathHasActiveLease(path)) return 0x8000;
+    return orig_fileSystemPageDeleteAction
+        ? ((NSUInteger(*)(id, SEL))orig_fileSystemPageDeleteAction)(self, _cmd)
+        : 0x8000;
+}
+
+static void hook_fileSystemDeleteSelectedItems(id self, SEL _cmd) {
+    SEL currentPathSelector = NSSelectorFromString(@"currentPath");
+    NSString *path = [self respondsToSelector:currentPathSelector]
+        ? ((id(*)(id, SEL))objc_msgSend)(self, currentPathSelector) : nil;
+    if (!MCMFilzaPathHasActiveLease(path)) {
+        if (orig_fileSystemDeleteSelectedItems)
+            ((void(*)(id, SEL))orig_fileSystemDeleteSelectedItems)(self, _cmd);
+        return;
+    }
+    SEL selectedSelector = NSSelectorFromString(@"indexPathsForSelectedItemsOrMenu");
+    NSArray *indexPaths = [self respondsToSelector:selectedSelector]
+        ? ((id(*)(id, SEL))objc_msgSend)(self, selectedSelector) : nil;
+    SEL askSelector = NSSelectorFromString(@"askDeleteItems:");
+    if ([self respondsToSelector:askSelector])
+        ((void(*)(id, SEL, id))objc_msgSend)(self, askSelector, indexPaths ?: @[]);
+}
+
+static void hook_fileSystemAskDeleteItems(id self, SEL _cmd, NSArray *indexPaths) {
+    if (parentFileSystemAskDeleteItems)
+        ((void(*)(id, SEL, id))parentFileSystemAskDeleteItems)(
+            self, _cmd, indexPaths ?: @[]);
+}
+
+static void hook_fileSystemDoEraseSelectedItems(id self, SEL _cmd,
+                                                 NSArray *indexPaths,
+                                                 void (^completion)(NSArray *)) {
+    MCMFilzaStart();
+    NSArray *items = selectedFileItems(self, indexPaths);
+    if (items.count == 0) {
+        if (orig_fileSystemDoEraseSelectedItems)
+            ((void(*)(id, SEL, id, id))orig_fileSystemDoEraseSelectedItems)(
+                self, _cmd, indexPaths, completion);
+        return;
+    }
+
+    NSMutableArray *deleted = [NSMutableArray array];
+    NSMutableArray<NSError *> *errors = [NSMutableArray array];
+    for (id item in items) {
+        NSString *path = fileItemPath(item);
+        NSError *error = nil;
+        if (!path.length || !MCMFilzaPathHasActiveLease(path)) {
+            setPastePOSIXError(&error, EACCES, @"delete", path ?: @"(unknown)");
+        } else if ([NSFileManager.defaultManager removeItemAtPath:path error:&error]) {
+            [deleted addObject:item];
+            NSLog(@"[ContainerDelete] deleted %@", path);
+        }
+        if (error) {
+            [errors addObject:error];
+            NSLog(@"[ContainerDelete] failed path=%@ error=%@", path, error);
+        }
+    }
+    if (completion) completion(deleted);
+    showDeleteFailure(self, errors);
+    NSLog(@"[ContainerDelete] complete deleted=%lu failed=%lu",
+          (unsigned long)deleted.count, (unsigned long)errors.count);
+}
+
 static dispatch_queue_t pasteCopyQueue(void) {
     static dispatch_queue_t queue;
     static dispatch_once_t onceToken;
@@ -934,6 +1047,48 @@ static void installHooks(void) {
                     (IMP)hook_fileSystemUpdateEditableUI, types))
                 method_setImplementation(updateEditableUI,
                     (IMP)hook_fileSystemUpdateEditableUI);
+        }
+
+        SEL pageDeleteSelector = NSSelectorFromString(@"pageDeleteAction");
+        Method pageDeleteAction = class_getInstanceMethod(fileSystemController,
+            pageDeleteSelector);
+        if (pageDeleteAction) {
+            orig_fileSystemPageDeleteAction = method_getImplementation(pageDeleteAction);
+            const char *types = method_getTypeEncoding(pageDeleteAction);
+            if (!class_addMethod(fileSystemController, pageDeleteSelector,
+                    (IMP)hook_fileSystemPageDeleteAction, types))
+                method_setImplementation(pageDeleteAction,
+                    (IMP)hook_fileSystemPageDeleteAction);
+        }
+
+        SEL deleteSelectedSelector = NSSelectorFromString(@"deleteSelectedItems");
+        Method deleteSelected = class_getInstanceMethod(fileSystemController,
+            deleteSelectedSelector);
+        if (deleteSelected) {
+            orig_fileSystemDeleteSelectedItems = method_getImplementation(deleteSelected);
+            method_setImplementation(deleteSelected,
+                (IMP)hook_fileSystemDeleteSelectedItems);
+        }
+
+        SEL askDeleteSelector = NSSelectorFromString(@"askDeleteItems:");
+        Method askDelete = class_getInstanceMethod(fileSystemController,
+            askDeleteSelector);
+        Method parentAskDelete = class_getInstanceMethod(
+            class_getSuperclass(fileSystemController), askDeleteSelector);
+        if (askDelete && parentAskDelete) {
+            parentFileSystemAskDeleteItems = method_getImplementation(parentAskDelete);
+            method_setImplementation(askDelete,
+                (IMP)hook_fileSystemAskDeleteItems);
+        }
+
+        SEL eraseSelector = NSSelectorFromString(
+            @"doEraseSelectedIndexPaths:completion:");
+        Method eraseSelected = class_getInstanceMethod(fileSystemController,
+            eraseSelector);
+        if (eraseSelected) {
+            orig_fileSystemDoEraseSelectedItems = method_getImplementation(eraseSelected);
+            method_setImplementation(eraseSelected,
+                (IMP)hook_fileSystemDoEraseSelectedItems);
         }
     }
 
