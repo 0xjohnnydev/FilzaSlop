@@ -52,6 +52,9 @@ fi
 cp "$DYLIB" "$APP/Frameworks/FilzaApplySandboxExt.dylib"
 codesign --remove-signature "$APP/Frameworks/FilzaApplySandboxExt.dylib"
 
+# Strip URL schemes (filza://, Dropbox, Box SDK) — detectable via canOpenURL:
+plutil -remove CFBundleURLTypes "$APP/Info.plist" 2>/dev/null || true
+
 if [[ -n "$CATALOG" ]]; then
   cp "$CATALOG" "$APP/MCMIdentifiers.plist"
 elif [[ -e "$APP/MCMIdentifiers.plist" ]]; then
