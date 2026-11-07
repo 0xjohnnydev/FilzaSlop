@@ -1,0 +1,70 @@
+
+name: Build FilzaSlop IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '**.m'
+      - '**.h'
+      - 'Makefile'
+      - 'control'
+      - 'FilzaApplySandboxExt.plist'
+      - 'scripts/**'
+      - '.github/workflows/**'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          brew update
+          brew install ldid dpkg xz trash
+
+      - name: Install Theos
+        env:
+          THEOS: ${{ runner.temp }}/theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$THEOS"
+          git clone https://github.com/theos/sdks.git "$THEOS/sdks"
+          echo "THEOS=$THEOS" >> "$GITHUB_ENV"
+          echo "$THEOS/bin" >> "$GITHUB_PATH"
+
+      - name: Download base IPA
+        run: |
+          mkdir -p build
+          curl -fL --retry 3 \
+            https://github.com/0xjohnnydev/FilzaSlop/releases/download/v1.2.0/FilzaSlop-v1.2.0-unsigned.ipa \
+            -o build/base.ipa
+
+      - name: Build unsigned IPA
+        env:
+          FILZASLOP_VERSION: 1.2.0-build.${{ github.run_number }}
+        run: |
+          zsh scripts/build_release_ipa.sh \
+            build/base.ipa \
+            build/FilzaSlop-unsigned.ipa
+
+      - name: Verify IPA
+        run: |
+          test -s build/FilzaSlop-unsigned.ipa
+          unzip -t build/FilzaSlop-unsigned.ipa
+          shasum -a 256 build/FilzaSlop-unsigned.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: FilzaSlop-unsigned-IPA
+          path: build/FilzaSlop-unsigned.ipa
+          retention-days: 14
